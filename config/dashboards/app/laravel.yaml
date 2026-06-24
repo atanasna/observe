@@ -1,0 +1,55 @@
+apiVersion: observe/v1
+kind: Dashboard
+
+metadata:
+  name: laravel
+  title: Laravel
+  folder: applications
+
+variables:
+  source:
+    type: datasource
+    datasource_type: prometheus
+    match: /(eu|us)-charge/
+    label: $1-ds
+    formats:
+      check: $1-ds-check
+      next: $1-ds-next
+    default: us-charge
+  deployment:
+    type: enum
+    values: [.*]
+    default: .*
+  tenant:
+    type: enum
+    values: [.*]
+    default: .*
+  roaming_sample_type:
+    type: enum
+    values: [.*]
+    default: .*
+  table_entries_sample_type:
+    type: enum
+    values: [.*]
+    default: .*
+
+datasources:
+  prometheus:
+    ref: ${vars.source}
+
+queryRefs:
+  - roaming_outbound_requests_2xx
+
+datasets:
+  roaming_outbound_requests_2xx:
+    query: roaming_outbound_requests_2xx
+    inputs:
+      deployment: ${vars.deployment}
+      tenant: ${vars.tenant}
+      roaming_sample_type: ${vars.roaming_sample_type}
+
+panels:
+  - id: roaming-outbound-requests-2xx
+    title: Roaming outbound requests 2xx
+    type: timeseries
+    dataset: roaming_outbound_requests_2xx

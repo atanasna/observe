@@ -1,0 +1,39 @@
+apiVersion: observe/v1
+kind: QueryCollection
+
+metadata:
+  folder: services/core
+
+queries:
+  request_rate:
+    datasource: prometheus
+    request:
+      query: sum(rate(http_requests_total[5m])) by (service)
+
+  cpu_raw:
+    datasource: cloudwatch
+    request:
+      namespace: AWS/EC2
+      metric: CPUUtilization
+      period: 60
+      stat: Average
+
+  high_cpu:
+    from: cpu_raw
+    transform:
+      - filter:
+          field: value
+          gte: 75
+      - sort:
+          field: value
+          direction: desc
+
+  error_logs:
+    from: logs_raw
+    transform:
+      - filter:
+          field: status
+          gte: 500
+      - select:
+          fields: [timestamp, service, status, message]
+      - limit: 25

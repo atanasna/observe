@@ -1,0 +1,44 @@
+apiVersion: observe/v1
+kind: QueryCollection
+
+metadata:
+  folder: platform/infrastructure
+
+queries:
+  cpu_load:
+    inputs:
+      datasource:
+        required: true
+      window:
+        default: 5m
+      group_by:
+        default: instance
+      matchers:
+        default: mode!="idle"
+    datasource: ${inputs.datasource}
+    request:
+      query: avg(rate(node_cpu_seconds_total{${inputs.matchers}}[${inputs.window}])) by (${inputs.group_by})
+
+  hot_nodes:
+    inputs:
+      from:
+        default: node_cpu
+    from: ${inputs.from}
+    transform:
+      - filter:
+          field: value
+          gte: 100
+      - sort:
+          field: value
+          direction: desc
+
+  disk_raw:
+    inputs:
+      datasource:
+        required: true
+    datasource: ${inputs.datasource}
+    request:
+      namespace: AWS/EBS
+      metric: VolumeQueueLength
+      period: 60
+      stat: Average

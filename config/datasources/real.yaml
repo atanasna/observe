@@ -1,0 +1,33 @@
+apiVersion: observe/v1
+kind: Datasources
+
+metadata:
+  folder: real
+
+datasources:
+  eu-charge:
+    type: prometheus
+    mode: real
+    url: https://prometheus.eu.infra.charge.ampeco.tech
+    basic_auth:
+      username: admin
+      password: master@ampeco.tech
+
+  uk-charge:
+    type: prometheus
+    mode: real
+    url: https://prometheus.uk.infra.charge.ampeco.tech
+    basic_auth:
+      username: admin
+      password: master@ampeco.tech
+  
+  us-charge:
+    type: prometheus
+    mode: real
+    url: https://prometheus.us.infra.charge.ampeco.tech
+    basic_auth:
+      username: admin
+      password: master@ampeco.tech
+
+
+

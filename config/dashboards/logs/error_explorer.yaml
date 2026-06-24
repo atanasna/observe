@@ -1,0 +1,47 @@
+apiVersion: observe/v1
+kind: Dashboard
+
+metadata:
+  name: error-explorer
+  title: Error Explorer
+  folder: platform/logs
+
+variables:
+  environment:
+    type: enum
+    values: [prod, stg]
+    default: prod
+  region:
+    type: enum
+    values: [eu, us]
+    default: us
+
+datasources:
+  opensearch:
+    ref: ${vars.environment}-${vars.region}-os
+
+queryRefs:
+  - logs_raw
+  - errors
+  - server_errors
+
+datasets:
+  logs_raw:
+    query: logs_raw
+
+  errors:
+    query: errors
+
+  server_errors:
+    query: server_errors
+
+panels:
+  - id: error-count
+    title: Error Count
+    type: stat
+    dataset: errors
+
+  - id: server-errors
+    title: Server Errors
+    type: table
+    dataset: server_errors

@@ -1,0 +1,14 @@
+apiVersion: observe/v1
+kind: Datasources
+
+metadata:
+  folder: external/prometheus
+
+datasources:
+  real-prometheus:
+    type: prometheus
+    mode: real
+    url: ${env.PROMETHEUS_URL}
+    basic_auth:
+      username: ${env.PROMETHEUS_BASIC_AUTH_USERNAME}
+      password: ${env.PROMETHEUS_BASIC_AUTH_PASSWORD}

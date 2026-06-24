@@ -1,0 +1,20 @@
+apiVersion: observe/v1
+kind: QueryCollection
+
+metadata:
+  folder: applications/laravel
+
+queries:
+  roaming_outbound_requests_2xx:
+    inputs:
+      deployment:
+        required: true
+      tenant:
+        required: true
+      roaming_sample_type:
+        required: true
+    datasource: prometheus
+    request:
+      range: true
+      interval: 1m
+      query: sum(app_outbound_requests_count:max{deployment=~"${inputs.deployment}", tenant=~"${inputs.tenant}", sample_type=~"${inputs.roaming_sample_type}", http_status=~"2.*"}) by (deployment, sample_type, http_status) * 60

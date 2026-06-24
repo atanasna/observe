@@ -1,0 +1,281 @@
+/* See the Tailwind configuration guide for advanced usage
+   https://tailwindcss.com/docs/configuration */
+
+@import "tailwindcss" source(none);
+@import "phoenix-colocated/observe/colocated.css";
+@source "../css";
+@source "../js";
+@source "../../lib/observe_web";
+/* Required for Tailwind to automatically pick up changes in colocated CSS files in dev */
+@source "../../_build/dev/phoenix-colocated/observe/*/";
+
+/* A Tailwind plugin that makes "hero-#{ICON}" classes available.
+   The heroicons installation itself is managed by your mix.exs */
+@plugin "../vendor/heroicons";
+
+/* daisyUI Tailwind Plugin. You can update this file by fetching the latest version with:
+   curl -sLO https://github.com/saadeghi/daisyui/releases/latest/download/daisyui.js
+   Make sure to look at the daisyUI changelog: https://daisyui.com/docs/changelog/ */
+@plugin "../vendor/daisyui" {
+  themes: false;
+}
+
+/* daisyUI theme plugin. You can update this file by fetching the latest version with:
+  curl -sLO https://github.com/saadeghi/daisyui/releases/latest/download/daisyui-theme.js
+  We ship with two themes, a light one inspired on Phoenix colors and a dark one inspired
+  on Elixir colors. Build your own at: https://daisyui.com/theme-generator/ */
+@plugin "../vendor/daisyui-theme" {
+  name: "dark";
+  default: true;
+  prefersdark: true;
+  color-scheme: "dark";
+  --color-base-100: #1e1e2e;
+  --color-base-200: #181825;
+  --color-base-300: #11111b;
+  --color-base-content: #cdd6f4;
+  --color-primary: #cba6f7;
+  --color-primary-content: #11111b;
+  --color-secondary: #89b4fa;
+  --color-secondary-content: #11111b;
+  --color-accent: #f5c2e7;
+  --color-accent-content: #11111b;
+  --color-neutral: #313244;
+  --color-neutral-content: #cdd6f4;
+  --color-info: #89dceb;
+  --color-info-content: #11111b;
+  --color-success: #a6e3a1;
+  --color-success-content: #11111b;
+  --color-warning: #f9e2af;
+  --color-warning-content: #11111b;
+  --color-error: #f38ba8;
+  --color-error-content: #11111b;
+  --radius-selector: 0.25rem;
+  --radius-field: 0.25rem;
+  --radius-box: 0.375rem;
+  --size-selector: 0.21875rem;
+  --size-field: 0.21875rem;
+  --border: 1.5px;
+  --depth: 1;
+  --noise: 0;
+}
+
+@plugin "../vendor/daisyui-theme" {
+  name: "light";
+  default: false;
+  prefersdark: false;
+  color-scheme: "light";
+  --color-base-100: oklch(98% 0 0);
+  --color-base-200: oklch(96% 0.001 286.375);
+  --color-base-300: oklch(92% 0.004 286.32);
+  --color-base-content: oklch(21% 0.006 285.885);
+  --color-primary: oklch(70% 0.213 47.604);
+  --color-primary-content: oklch(98% 0.016 73.684);
+  --color-secondary: oklch(55% 0.027 264.364);
+  --color-secondary-content: oklch(98% 0.002 247.839);
+  --color-accent: oklch(0% 0 0);
+  --color-accent-content: oklch(100% 0 0);
+  --color-neutral: oklch(44% 0.017 285.786);
+  --color-neutral-content: oklch(98% 0 0);
+  --color-info: oklch(62% 0.214 259.815);
+  --color-info-content: oklch(97% 0.014 254.604);
+  --color-success: oklch(70% 0.14 182.503);
+  --color-success-content: oklch(98% 0.014 180.72);
+  --color-warning: oklch(66% 0.179 58.318);
+  --color-warning-content: oklch(98% 0.022 95.277);
+  --color-error: oklch(58% 0.253 17.585);
+  --color-error-content: oklch(96% 0.015 12.422);
+  --radius-selector: 0.25rem;
+  --radius-field: 0.25rem;
+  --radius-box: 0.5rem;
+  --size-selector: 0.21875rem;
+  --size-field: 0.21875rem;
+  --border: 1.5px;
+  --depth: 1;
+  --noise: 0;
+}
+
+/* Add variants based on LiveView classes */
+@custom-variant phx-click-loading (.phx-click-loading&, .phx-click-loading &);
+@custom-variant phx-submit-loading (.phx-submit-loading&, .phx-submit-loading &);
+@custom-variant phx-change-loading (.phx-change-loading&, .phx-change-loading &);
+
+/* Use the data attribute for dark mode  */
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+
+/* Make LiveView wrapper divs transparent for layout */
+[data-phx-session], [data-phx-teleported-src] { display: contents }
+
+/* This file is for your main application CSS */
+
+:root {
+  --mocha-rosewater: #f5e0dc;
+  --mocha-flamingo: #f2cdcd;
+  --mocha-pink: #f5c2e7;
+  --mocha-mauve: #cba6f7;
+  --mocha-red: #f38ba8;
+  --mocha-peach: #fab387;
+  --mocha-yellow: #f9e2af;
+  --mocha-green: #a6e3a1;
+  --mocha-teal: #94e2d5;
+  --mocha-sky: #89dceb;
+  --mocha-sapphire: #74c7ec;
+  --mocha-blue: #89b4fa;
+  --mocha-lavender: #b4befe;
+  --mocha-text: #cdd6f4;
+  --mocha-subtext: #bac2de;
+  --mocha-overlay: #6c7086;
+  --mocha-surface2: #585b70;
+  --mocha-surface1: #45475a;
+  --mocha-surface0: #313244;
+  --mocha-base: #1e1e2e;
+  --mocha-mantle: #181825;
+  --mocha-crust: #11111b;
+}
+
+html[data-theme="dark"] body,
+body {
+  min-height: 100vh;
+  background:
+    linear-gradient(90deg, rgb(203 166 247 / 0.08) 1px, transparent 1px),
+    linear-gradient(0deg, rgb(137 180 250 / 0.06) 1px, transparent 1px),
+    radial-gradient(circle at 12% 8%, rgb(203 166 247 / 0.16), transparent 24rem),
+    radial-gradient(circle at 86% 12%, rgb(137 220 235 / 0.10), transparent 24rem),
+    linear-gradient(135deg, var(--mocha-crust) 0%, var(--mocha-mantle) 42%, var(--mocha-base) 100%);
+  background-size: 48px 48px, 48px 48px, auto, auto, auto;
+  color: var(--mocha-text);
+}
+
+.mocha-shell {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgb(180 190 254 / 0.24);
+  background:
+    linear-gradient(135deg, rgb(49 50 68 / 0.72), rgb(17 17 27 / 0.86)),
+    linear-gradient(90deg, rgb(203 166 247 / 0.14), transparent 34%);
+  backdrop-filter: blur(14px);
+}
+
+.mocha-shell::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, rgb(137 220 235 / 0.22), transparent 16rem) top left / 100% 1px no-repeat,
+    linear-gradient(180deg, rgb(203 166 247 / 0.22), transparent 12rem) top left / 1px 100% no-repeat;
+}
+
+.mocha-card {
+  border: 1px solid rgb(180 190 254 / 0.20);
+  background: linear-gradient(145deg, rgb(49 50 68 / 0.62), rgb(24 24 37 / 0.84));
+  backdrop-filter: blur(12px);
+}
+
+.mocha-card:hover {
+  border-color: rgb(203 166 247 / 0.58);
+}
+
+.mocha-panel {
+  border: 1px solid rgb(137 180 250 / 0.24);
+  background: linear-gradient(180deg, rgb(49 50 68 / 0.56), rgb(30 30 46 / 0.90));
+}
+
+.mocha-chip {
+  border: 1px solid rgb(180 190 254 / 0.16);
+  background: rgb(69 71 90 / 0.48);
+  color: var(--mocha-subtext);
+}
+
+.mocha-button {
+  border: 1px solid rgb(245 194 231 / 0.45);
+  background: linear-gradient(135deg, var(--mocha-mauve), var(--mocha-blue));
+  color: var(--mocha-crust);
+}
+
+.mocha-button:hover {
+  transform: translate(-1px, -1px);
+}
+
+.mocha-muted {
+  color: var(--mocha-subtext);
+}
+
+.mocha-label {
+  color: var(--mocha-sky);
+}
+
+.mocha-heading {
+  color: var(--mocha-text);
+}
+
+.mocha-code {
+  border: 1px solid rgb(137 180 250 / 0.16);
+  background:
+    linear-gradient(180deg, rgb(17 17 27 / 0.92), rgb(24 24 37 / 0.94)),
+    radial-gradient(circle at 100% 0%, rgb(203 166 247 / 0.20), transparent 18rem);
+  color: var(--mocha-green);
+}
+
+.mocha-grid-bg {
+  background-image:
+    linear-gradient(rgb(180 190 254 / 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(180 190 254 / 0.045) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+.tree-clickable {
+  position: relative;
+  cursor: pointer;
+}
+
+.tree-clickable::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  background: transparent;
+  transition: background-color 140ms ease;
+}
+
+.tree-clickable:hover::before {
+  background: var(--mocha-mauve);
+}
+
+.tree-clickable:hover {
+  background: rgb(49 50 68 / 0.50);
+}
+
+.tree-clickable:active {
+  background: rgb(69 71 90 / 0.55);
+}
+
+.tree-arrow {
+  transition: transform 140ms ease, color 140ms ease;
+}
+
+.tree-clickable:hover .tree-arrow {
+  color: var(--mocha-pink);
+  transform: translateX(2px);
+}
+
+.app-sidebar {
+  transform: translateX(0);
+}
+
+.app-content {
+  transition: padding-left 180ms ease;
+}
+
+.sidebar-collapsed .app-sidebar {
+  transform: translateX(calc(-100% - 1px));
+}
+
+@media (min-width: 1024px) {
+  .app-content {
+    padding-left: 16rem;
+  }
+
+  .sidebar-collapsed .app-content {
+    padding-left: 0;
+  }
+}
