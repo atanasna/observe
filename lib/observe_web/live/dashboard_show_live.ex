@@ -213,6 +213,15 @@ defmodule ObserveWeb.DashboardShowLive do
               </p>
             </div>
             <div class="flex flex-wrap items-end gap-2">
+              <button
+                id="reset-timeseries-zoom"
+                type="button"
+                aria-label="Reset timeseries zoom"
+                title="Reset zoom"
+                class="hidden grid size-8 place-items-center border border-[#fab387]/25 bg-[#181825]/80 text-[#fab387] transition hover:border-[#fab387]/55 hover:text-[#f9e2af]"
+              >
+                <.icon name="hero-arrow-path-micro" class="size-4" />
+              </button>
               <.form
                 for={
                   to_form(%{
@@ -304,7 +313,9 @@ defmodule ObserveWeb.DashboardShowLive do
                 class="w-full border border-[#b4befe]/15 bg-[#11111b]/55 px-2 py-1.5 text-xs font-semibold text-[#cdd6f4] outline-none transition focus:border-[#cba6f7]/70 focus:bg-[#181825]"
               >
                 <option
-                  :for={{label, value} <- Variables.select_options(spec, @datasources)}
+                  :for={
+                    {label, value} <- Variables.select_options(spec, @datasources, @variable_values)
+                  }
                   value={value}
                   selected={@variable_values[name] == value}
                 >
@@ -360,20 +371,25 @@ defmodule ObserveWeb.DashboardShowLive do
           <article
             :for={panel <- Map.get(@dashboard, "panels", [])}
             id={"panel-#{panel["id"]}"}
+            data-stacked={stacked_attr(panel)}
             class={[
               "mocha-card sharp-corner p-3 transition duration-300",
               panel["type"] == "row" && "xl:col-span-2 2xl:col-span-3"
             ]}
           >
-            <div class="mb-2 flex items-start justify-between gap-3">
-              <div>
-                <h2 class="text-sm font-semibold text-[#cdd6f4]">{panel["title"]}</h2>
-                <p class="mt-0.5 text-[0.65rem] font-semibold uppercase tracking-[0.16em] text-[#9399b2]">
-                  {panel["type"]}{panel["dataset"] && " · #{panel["dataset"]}"}
-                </p>
-              </div>
-              <span :if={panel["dataset"]} class="mocha-chip px-2 py-0.5 text-[0.68rem] font-semibold">
-                {length(Map.get(@datasets, panel["dataset"], []))} rows
+            <div class="mb-2 flex items-center gap-1.5">
+              <h2 class="text-sm font-semibold text-[#cdd6f4]">{panel["title"]}</h2>
+              <span :if={panel_description(panel)} class="group relative inline-flex items-center">
+                <button
+                  type="button"
+                  aria-label="Panel description"
+                  class="grid size-5 place-items-center text-[#89dceb]/80 transition hover:text-[#f5c2e7] focus:outline-none focus:text-[#f5c2e7]"
+                >
+                  <.icon name="hero-information-circle-micro" class="size-4" />
+                </button>
+                <span class="pointer-events-none absolute left-1/2 top-5 z-20 hidden w-64 -translate-x-1/2 border border-[#89dceb]/25 bg-[#11111b]/95 px-3 py-2 text-xs font-medium leading-5 text-[#cdd6f4] shadow-xl shadow-[#000]/30 group-hover:block group-focus-within:block">
+                  {panel_description(panel)}
+                </span>
               </span>
             </div>
 
@@ -383,7 +399,7 @@ defmodule ObserveWeb.DashboardShowLive do
                 Loading dataset
               </div>
             <% else %>
-              <%= if error = panel_error(panel, @datasets) do %>
+              <%= if error = panel_error(panel, @datasets, @dashboard) do %>
                 <div class="border border-[#f38ba8]/30 bg-[#f38ba8]/10 p-3 text-xs font-semibold leading-5 text-[#f38ba8]">
                   {error}
                 </div>
@@ -397,18 +413,19 @@ defmodule ObserveWeb.DashboardShowLive do
                     <div class="sharp-corner bg-gradient-to-br from-[#cba6f7] via-[#89b4fa] to-[#94e2d5] p-4 text-[#11111b]">
                       <p class="text-xs font-semibold uppercase tracking-[0.18em] opacity-70">Rows</p>
                       <p class="mt-1 text-4xl font-semibold tracking-tight">
-                        {length(panel_rows(panel, @datasets))}
+                        {length(panel_rows(panel, @datasets, @dashboard))}
                       </p>
                     </div>
                   <% "timeseries" -> %>
                     <.timeseries_chart
                       id={"chart-#{panel["id"]}"}
-                      rows={panel_rows(panel, @datasets)}
+                      panel={panel}
+                      rows={panel_rows(panel, @datasets, @dashboard)}
                     />
                   <% "bargauge" -> %>
                     <div class="max-h-56 space-y-2 overflow-auto">
                       <div
-                        :for={row <- panel_rows(panel, @datasets)}
+                        :for={row <- panel_rows(panel, @datasets, @dashboard)}
                         class="grid grid-cols-[minmax(8rem,1fr)_3fr_auto] items-center gap-2 text-xs"
                       >
                         <span class="truncate text-[#cdd6f4]">{series_label(row)}</span>
@@ -424,7 +441,7 @@ defmodule ObserveWeb.DashboardShowLive do
                   <% "state-timeline" -> %>
                     <div class="max-h-56 space-y-1.5 overflow-auto">
                       <div
-                        :for={row <- panel_rows(panel, @datasets)}
+                        :for={row <- panel_rows(panel, @datasets, @dashboard)}
                         class="grid grid-cols-[minmax(10rem,1fr)_4rem_1fr] items-center gap-2 border border-[#b4befe]/10 bg-[#11111b]/35 px-2 py-1.5 text-xs"
                       >
                         <span class="truncate text-[#cdd6f4]">{series_label(row)}</span>
@@ -435,7 +452,7 @@ defmodule ObserveWeb.DashboardShowLive do
                       </div>
                     </div>
                   <% _ -> %>
-                    <.data_table rows={panel_rows(panel, @datasets)} />
+                    <.data_table rows={panel_rows(panel, @datasets, @dashboard)} />
                 <% end %>
               <% end %>
             <% end %>
@@ -447,10 +464,12 @@ defmodule ObserveWeb.DashboardShowLive do
   end
 
   attr :id, :string, required: true
+  attr :panel, :map, required: true
   attr :rows, :list, required: true
 
   def timeseries_chart(assigns) do
     assigns = assign(assigns, :chart_json, Jason.encode!(chart_payload(assigns.rows)))
+    assigns = assign(assigns, :stacked, stacked_attr(assigns.panel))
 
     ~H"""
     <div
@@ -459,6 +478,7 @@ defmodule ObserveWeb.DashboardShowLive do
       phx-update="ignore"
       data-chart={@chart_json}
       data-height="160"
+      data-stacked={@stacked}
       class="relative min-h-40 border border-[#89dceb]/20 bg-[#11111b]/45 p-2"
     />
     """
@@ -498,35 +518,81 @@ defmodule ObserveWeb.DashboardShowLive do
   defp columns([]), do: []
   defp columns([row | _]), do: Map.keys(row)
 
-  defp panel_rows(%{"dataset" => dataset}, datasets), do: Map.get(datasets, dataset, [])
-  defp panel_rows(_panel, _datasets), do: []
+  defp panel_rows(%{"datasets" => panel_datasets}, datasets, dashboard)
+       when is_list(panel_datasets) do
+    Enum.flat_map(panel_datasets, fn dataset ->
+      datasets
+      |> Map.get(dataset, [])
+      |> Enum.map(&put_dataset_metadata(&1, dataset, dashboard))
+    end)
+  end
+
+  defp panel_rows(%{"dataset" => dataset}, datasets, dashboard) do
+    datasets
+    |> Map.get(dataset, [])
+    |> Enum.map(&put_dataset_metadata(&1, dataset, dashboard))
+  end
+
+  defp panel_rows(_panel, _datasets, _dashboard), do: []
+
+  defp stacked_attr(%{"stacked" => true}), do: "true"
+  defp stacked_attr(_panel), do: "false"
+
+  defp panel_description(%{"description" => description})
+       when is_binary(description) and description != "",
+       do: description
+
+  defp panel_description(_panel), do: nil
 
   defp panel_loading?(%{"type" => "row"}, _datasets, _loading?), do: false
+
+  defp panel_loading?(%{"datasets" => panel_datasets}, datasets, true)
+       when is_list(panel_datasets),
+       do: Enum.any?(panel_datasets, &(not Map.has_key?(datasets, &1)))
 
   defp panel_loading?(%{"dataset" => dataset}, datasets, true),
     do: not Map.has_key?(datasets, dataset)
 
   defp panel_loading?(_panel, _datasets, _loading?), do: false
 
-  defp panel_error(panel, datasets) do
-    case PanelCompatibility.validate(panel, panel_rows(panel, datasets)) do
+  defp panel_error(panel, datasets, dashboard) do
+    case PanelCompatibility.validate(panel, panel_rows(panel, datasets, dashboard)) do
       :ok -> nil
       {:error, reason} -> reason
     end
   end
+
+  defp put_dataset_metadata(row, dataset, dashboard) do
+    dataset_config = get_in(dashboard, ["datasets", dataset]) || %{}
+
+    row
+    |> Map.put("dataset", dataset)
+    |> maybe_put_dataset_label(Map.get(dataset_config, "label"))
+  end
+
+  defp maybe_put_dataset_label(row, label) when is_binary(label) and label != "",
+    do: Map.put(row, "dataset_label", label)
+
+  defp maybe_put_dataset_label(row, _label), do: row
 
   defp format_cell(value) when is_binary(value), do: value
   defp format_cell(value) when is_float(value), do: :erlang.float_to_binary(value, decimals: 2)
   defp format_cell(value), do: inspect(value)
 
   defp series_label(row) do
-    row
-    |> Map.drop(["time", "value", "raw_value"])
-    |> Enum.map(fn {key, value} -> "#{key}=#{value}" end)
-    |> Enum.join(" ")
-    |> case do
-      "" -> "series"
-      label -> label
+    case Map.get(row, "dataset_label") do
+      label when is_binary(label) and label != "" ->
+        label
+
+      _label ->
+        row
+        |> Map.drop(["time", "value", "raw_value", "dataset_label"])
+        |> Enum.map(fn {key, value} -> "#{key}=#{value}" end)
+        |> Enum.join(" ")
+        |> case do
+          "" -> "series"
+          label -> label
+        end
     end
   end
 

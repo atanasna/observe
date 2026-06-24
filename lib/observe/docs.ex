@@ -363,7 +363,7 @@ defmodule Observe.Docs do
           "Variables are dashboard-scoped values selected in the UI and used by the query planner. Today, variables are primarily used to resolve datasource aliases."
         ),
         table("Variable options", ["Option", "Required", "Description"], [
-          ["type", "Yes", "Variable type. Supported values: enum and datasource."],
+          ["type", "Yes", "Variable type. Supported values: enum, datasource, and label_values."],
           ["values", "Yes for enum", "Allowed values displayed in the dashboard selector."],
           [
             "datasource_type",
@@ -371,9 +371,24 @@ defmodule Observe.Docs do
             "For datasource variables, only show datasources of this type."
           ],
           [
+            "datasource",
+            "Yes for label_values",
+            "Datasource ref or variable interpolation used to fetch label values."
+          ],
+          [
+            "metric",
+            "No",
+            "For label_values variables, restrict discovery to a metric selector."
+          ],
+          [
+            "metric_label",
+            "Yes for label_values",
+            "Metric label name whose values should populate the selector."
+          ],
+          [
             "match",
             "No",
-            "Only show variable options matching this regex. Works for enum values and datasource refs."
+            "Only show variable options matching this regex. Works for enum values, datasource refs, and label values."
           ],
           [
             "label",
@@ -412,6 +427,20 @@ defmodule Observe.Docs do
           prometheus:
             ref: ${vars.prom}
         """),
+        code("Label values variable", """
+        variables:
+          prom:
+            type: datasource
+            datasource_type: prometheus
+
+          deployment:
+            type: label_values
+            datasource: ${vars.prom}
+            metric: app_queue_low_running_size
+            metric_label: deployment
+            match: /(eu|us|uk)-charge/
+            label: $1
+        """),
         table("Interpolation", ["Syntax", "Description"], [
           ["${vars.region}", "Replaced with the current value of the region variable."],
           ["${vars.region.label}", "Replaced with the displayed label for the selected option."],
@@ -431,7 +460,7 @@ defmodule Observe.Docs do
         ]),
         callout(
           "Validation rule",
-          "If a submitted variable value is not in the allowed enum values or filtered datasource refs, Observe falls back to the default value."
+          "If a submitted variable value is not in the currently allowed options, Observe falls back to the configured default when valid, then the first valid option."
         )
       ]
     }
@@ -499,6 +528,39 @@ defmodule Observe.Docs do
             inputs:
               target: ${vars.data.formats.check}
         """),
+        code("Parameterized metric name from dataset inputs", """
+        # Query collection
+        queries:
+          queue:
+            inputs:
+              deployment:
+                required: true
+              priority:
+                required: true
+              state:
+                required: true
+            datasource: prometheus
+            request:
+              range: true
+              interval: 1m
+              query: max(app_queue_${inputs.priority}_${inputs.state}_size{deployment="${inputs.deployment}"}) by (deployment)
+
+        # Dashboard
+        queryRefs:
+          - queue
+
+        datasets:
+          queue_high_pending:
+            query: queue
+            inputs:
+              deployment: ${vars.deployment}
+              priority: high
+              state: pending
+        """),
+        callout(
+          "Parameterized queries",
+          "Dataset inputs can be interpolated anywhere in a source request, including metric names. Use this when one query template should produce many concrete datasets."
+        ),
         table("Validation rules", ["Rule", "Reason"], [
           [
             "A query cannot mix datasource/request with from/transform.",
@@ -587,11 +649,30 @@ defmodule Observe.Docs do
           ["id", "Yes", "Stable panel identifier used in DOM IDs."],
           ["title", "Yes", "Human-readable panel title."],
           [
+            "description",
+            "No",
+            "Optional help text shown from the info icon next to the panel title."
+          ],
+          [
             "type",
             "Yes",
             "Visualization type. Supported values: row, table, stat, timeseries, bargauge, state-timeline."
           ],
-          ["dataset", "Yes", "Query name whose dataset should be rendered."]
+          [
+            "dataset",
+            "Yes, unless datasets is set",
+            "Query name whose dataset should be rendered."
+          ],
+          [
+            "datasets",
+            "Yes, unless dataset is set",
+            "List of query datasets to merge for this panel."
+          ],
+          [
+            "stacked",
+            "No",
+            "For timeseries panels, render visible series as a stacked area chart when true."
+          ]
         ]),
         code("Panels", """
         panels:
@@ -605,10 +686,44 @@ defmodule Observe.Docs do
             type: stat
             dataset: error_logs
         """),
+        code("Panel with multiple datasets", """
+        datasets:
+          queue_default_pending:
+            query: queue
+            label: Default
+            inputs:
+              priority: default
+              state: pending
+
+          queue_low_pending:
+            query: queue
+            label: Low
+            inputs:
+              priority: low
+              state: pending
+
+        panels:
+          - id: queue-pending
+            title: Queue pending size
+            description: Pending queue size by priority for the selected deployment.
+            type: timeseries
+            stacked: true
+            datasets:
+              - queue_default_pending
+              - queue_low_pending
+              - queue_high_pending
+        """),
+        callout(
+          "Dataset labels",
+          "A dataset can define label to provide a stable display name for every row consumed from that dataset. Timeseries legends and tooltips prefer this label when present."
+        ),
         table("Panel types", ["Type", "Current behavior"], [
           ["table", "Renders rows and columns from the dataset."],
           ["stat", "Renders the dataset row count as a large number."],
-          ["timeseries", "Renders a D3 line chart from numeric time/value rows."],
+          [
+            "timeseries",
+            "Renders a D3 line chart from numeric time/value rows, or a stacked area chart when stacked is true. Drag-selecting a time range zooms all timeseries panels together."
+          ],
           ["bargauge", "Renders compact HTML bar gauges from numeric value rows."],
           ["state-timeline", "Renders compact state rows from time/value series."],
           ["row", "Renders a section divider and requires no dataset."]

@@ -181,7 +181,7 @@ defmodule Observe.QueryGraph do
     missing =
       panels
       |> Enum.reject(&(Map.get(&1, "type") == "row"))
-      |> Enum.map(&Map.get(&1, "dataset"))
+      |> Enum.flat_map(&panel_datasets/1)
       |> Enum.reject(&Map.has_key?(queries, &1))
 
     case missing do
@@ -189,6 +189,10 @@ defmodule Observe.QueryGraph do
       [dataset | _] -> {:error, "panel references unknown dataset #{inspect(dataset)}"}
     end
   end
+
+  defp panel_datasets(%{"datasets" => datasets}) when is_list(datasets), do: datasets
+  defp panel_datasets(%{"dataset" => dataset}), do: [dataset]
+  defp panel_datasets(_panel), do: [nil]
 
   defp topo_sort(queries) do
     Enum.reduce_while(Map.keys(queries), {:ok, [], MapSet.new(), MapSet.new()}, fn name,

@@ -1,0 +1,39 @@
+apiVersion: observe/v1
+kind: QueryCollection
+
+metadata:
+  folder: applications/queues
+
+queries:
+  queue_low_pending:
+    datasource: prometheus
+    inputs:
+      deployment:
+        required: true
+    request:
+      range: true
+      interval: 1m
+      query: max(app_queue_low_pending_size{deployment="${inputs.deployment}"}) by (deployment)
+  queue_default_pending:
+    datasource: prometheus
+    inputs:
+      deployment:
+        required: true
+    request:
+      range: true
+      interval: 1m
+      query: max(app_queue_default_pending_size{deployment="${inputs.deployment}"}) by (deployment)
+  queue:
+    datasource: prometheus
+    inputs:
+      deployment:
+        required: true
+      priority:
+        required: true
+      state:
+        required: true
+    request:
+      range: true
+      interval: 1m
+      query: max(app_queue_${inputs.priority}_${inputs.state}_size{deployment="${inputs.deployment}"}) by (deployment)
+

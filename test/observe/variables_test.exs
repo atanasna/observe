@@ -129,4 +129,42 @@ defmodule Observe.VariablesTest do
              "prometheus_datasource" => "eu-charge"
            }
   end
+
+  test "falls back to the first currently valid dependent variable option" do
+    variables = %{
+      "source" => %{
+        "type" => "enum",
+        "values" => ["eu-charge", "us-charge"],
+        "default" => "eu-charge"
+      },
+      "deployment" => %{
+        "type" => "enum",
+        "values" => ["us-charge"],
+        "default" => "eu-charge"
+      }
+    }
+
+    assert Variables.merge(variables, %{"source" => "us-charge", "deployment" => "eu-charge"}) ==
+             %{
+               "source" => "us-charge",
+               "deployment" => "us-charge"
+             }
+  end
+
+  test "label values variables are resolved through the selected datasource" do
+    datasources = %{
+      "eu-charge" => %{"type" => "prometheus"},
+      "logs" => %{"type" => "opensearch"}
+    }
+
+    spec = %{
+      "type" => "label_values",
+      "datasource" => "${vars.source}",
+      "metric" => "app_queue_low_running_size",
+      "metric_label" => "deployment"
+    }
+
+    assert Variables.select_options(spec, datasources, %{"source" => "eu-charge"}) == []
+    assert Variables.select_options(spec, datasources, %{"source" => "logs"}) == []
+  end
 end

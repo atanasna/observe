@@ -3,13 +3,17 @@ defmodule Observe.Variables do
   Resolves dashboard variables and interpolates `${vars.name}` and `${inputs.name}` placeholders.
   """
 
+  alias Observe.Datasources.Prometheus
+
   @var_placeholder ~r/\$\{vars\.([A-Za-z0-9_\-]+)((?:\.[A-Za-z0-9_\-]+)*)\}/
   @input_placeholder ~r/\$\{inputs\.([A-Za-z0-9_\-]+)\}/
   @env_placeholder ~r/\$\{env\.([A-Za-z0-9_]+)\}/
 
   def defaults(variables, datasources \\ %{}) do
-    Map.new(variables, fn {name, spec} ->
-      values = options(spec, datasources)
+    variables
+    |> ordered_variables()
+    |> Enum.reduce(%{}, fn {name, spec}, acc ->
+      values = options(spec, datasources, acc)
       default = Map.get(spec, "default")
 
       value =
@@ -19,23 +23,32 @@ defmodule Observe.Variables do
           true -> List.first(values)
         end
 
-      {name, value}
+      Map.put(acc, name, value)
     end)
   end
 
   def merge(variables, params, datasources \\ %{}) do
     defaults = defaults(variables, datasources)
 
-    Enum.reduce(defaults, defaults, fn {name, default}, acc ->
-      value = Map.get(params, name, default)
-      spec = Map.get(variables, name, %{})
-      values = options(spec, datasources)
+    requested = Map.merge(defaults, params)
 
-      if values == [] or value in values do
-        Map.put(acc, name, value)
-      else
-        Map.put(acc, name, default)
-      end
+    variables
+    |> ordered_variables()
+    |> Enum.reduce(defaults, fn {name, _spec}, acc ->
+      default = Map.get(defaults, name)
+      value = Map.get(requested, name, default)
+      spec = Map.get(variables, name, %{})
+      values = options(spec, datasources, Map.merge(requested, acc))
+
+      selected_value =
+        cond do
+          values == [] -> value
+          value in values -> value
+          default in values -> default
+          true -> List.first(values)
+        end
+
+      Map.put(acc, name, selected_value)
     end)
   end
 
@@ -46,19 +59,25 @@ defmodule Observe.Variables do
     end)
   end
 
-  def options(%{"type" => "datasource"} = spec, datasources) do
-    spec
-    |> select_options(datasources)
-    |> Enum.map(fn {_label, value} -> value end)
+  def options(spec, datasources) do
+    options(spec, datasources, %{})
   end
 
-  def options(spec, datasources) do
+  def options(spec, datasources, vars) do
     spec
-    |> select_options(datasources)
+    |> select_options(datasources, vars)
     |> Enum.map(fn {_label, value} -> value end)
   end
 
   def select_options(%{"type" => "datasource"} = spec, datasources) do
+    select_options(spec, datasources, %{})
+  end
+
+  def select_options(spec, datasources) do
+    select_options(spec, datasources, %{})
+  end
+
+  def select_options(%{"type" => "datasource"} = spec, datasources, _vars) do
     datasource_type = Map.get(spec, "datasource_type")
     matcher = variable_matcher(spec)
 
@@ -71,7 +90,16 @@ defmodule Observe.Variables do
     |> Enum.sort_by(fn {label, _value} -> label end)
   end
 
-  def select_options(spec, _datasources) do
+  def select_options(%{"type" => "label_values"} = spec, datasources, vars) do
+    matcher = variable_matcher(spec)
+
+    spec
+    |> label_values(datasources, vars)
+    |> Enum.map(fn value -> {option_label(to_string(value), matcher, spec), value} end)
+    |> Enum.reject(fn {label, _value} -> is_nil(label) end)
+  end
+
+  def select_options(spec, _datasources, _vars) do
     matcher = variable_matcher(spec)
 
     spec
@@ -103,6 +131,27 @@ defmodule Observe.Variables do
       vars
       |> variable_value(name, path)
       |> to_string()
+    end)
+  end
+
+  defp label_values(spec, datasources, vars) do
+    datasource_ref = spec |> Map.get("datasource") |> interpolate(vars)
+
+    case Map.get(datasources, datasource_ref) do
+      %{"type" => "prometheus"} = datasource ->
+        case Prometheus.label_values(datasource, spec) do
+          {:ok, values} -> values
+          {:error, _reason} -> []
+        end
+
+      _datasource ->
+        []
+    end
+  end
+
+  defp ordered_variables(variables) do
+    Enum.sort_by(variables, fn {_name, spec} ->
+      if Map.get(spec, "type") == "label_values", do: 1, else: 0
     end)
   end
 

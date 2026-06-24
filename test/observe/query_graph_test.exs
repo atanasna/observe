@@ -14,6 +14,17 @@ defmodule Observe.QueryGraphTest do
     assert get_in(dashboards, ["laravel", "_meta", "folder"]) == "applications"
   end
 
+  test "loads dataset labels for panel display" do
+    {:ok, datasources} = Provisioning.load_datasources()
+    {:ok, queries} = Provisioning.load_queries()
+    {:ok, dashboards} = Provisioning.load_dashboards(datasources, queries)
+
+    assert get_in(dashboards, ["queue", "datasets", "queue_default_pending", "label"]) ==
+             "Default"
+
+    assert get_in(dashboards, ["queue", "datasets", "queue_low_pending", "label"]) == "Low"
+  end
+
   test "skips invalid dashboards instead of failing the full dashboard load" do
     {:ok, datasources} = Provisioning.load_datasources()
     {:ok, queries} = Provisioning.load_queries()
@@ -111,5 +122,26 @@ defmodule Observe.QueryGraphTest do
 
     assert get_in(plan.queries, ["metric_check", "request", "query"]) ==
              "metric{target=\"us-ds-check\"}"
+  end
+
+  test "allows panels to reference multiple datasets" do
+    dashboard = %{
+      "variables" => %{},
+      "datasources" => %{"prometheus" => %{"ref" => "eu-p"}},
+      "queries" => %{
+        "default_pending" => %{"datasource" => "prometheus", "request" => %{"query" => "up"}},
+        "low_pending" => %{"datasource" => "prometheus", "request" => %{"query" => "up"}}
+      },
+      "panels" => [
+        %{
+          "id" => "queue",
+          "type" => "table",
+          "datasets" => ["default_pending", "low_pending"]
+        }
+      ]
+    }
+
+    assert {:ok, plan} = QueryGraph.plan(dashboard, %{"eu-p" => %{}})
+    assert plan.query_order == ["default_pending", "low_pending"]
   end
 end

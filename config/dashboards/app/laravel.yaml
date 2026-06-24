@@ -10,7 +10,7 @@ variables:
   source:
     type: datasource
     datasource_type: prometheus
-    match: /(eu|us)-charge/
+    match: /(\w+)-charge/
     label: $1-ds
     formats:
       check: $1-ds-check

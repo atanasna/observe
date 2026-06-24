@@ -12,6 +12,36 @@ defmodule Observe.Datasources.Prometheus do
     end
   end
 
+  def label_values(%{"mode" => "real"} = datasource, spec) do
+    with {:ok, url} <- required(datasource, "url"),
+         {:ok, label} <- required(spec, "metric_label"),
+         {:ok, response} <- run_label_values_request(url, datasource, spec, label),
+         {:ok, body} <- decode_response(response) do
+      {:ok, get_in(body, ["data"]) || []}
+    end
+  end
+
+  def label_values(_datasource, _spec), do: {:ok, []}
+
+  defp run_label_values_request(url, datasource, spec, label) do
+    params = label_values_params(spec)
+
+    options =
+      [params: params, receive_timeout: Map.get(datasource, "timeout_ms", 15_000)]
+      |> maybe_put_auth(datasource)
+
+    case Req.get(prometheus_url(url, "label/#{URI.encode(label)}/values"), options) do
+      {:ok, response} -> {:ok, response}
+      {:error, reason} -> {:error, "Prometheus request failed: #{Exception.message(reason)}"}
+    end
+  end
+
+  defp label_values_params(%{"metric" => metric}) when is_binary(metric) and metric != "" do
+    [{:"match[]", metric}]
+  end
+
+  defp label_values_params(_spec), do: []
+
   defp run_request(url, datasource, request, query) do
     endpoint = if range_request?(request), do: "query_range", else: "query"
     params = request_params(request, query)
