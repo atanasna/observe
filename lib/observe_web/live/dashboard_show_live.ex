@@ -335,46 +335,105 @@ defmodule ObserveWeb.DashboardShowLive do
         </div>
 
         <div
-          :if={@plan}
-          id="execution-plan"
-          class="mocha-panel grid gap-3 p-3 lg:grid-cols-2"
-        >
-          <div>
-            <h2 class="text-xs font-semibold uppercase tracking-[0.18em] text-[#f9e2af]">
-              Datasources
-            </h2>
-            <div class="mt-2 flex flex-wrap gap-1.5">
-              <span
-                :for={{alias_name, datasource} <- @plan.datasource_aliases}
-                class="mocha-chip px-2 py-0.5 text-[0.68rem] font-semibold"
-              >
-                {alias_name} → {datasource.ref}
-              </span>
-            </div>
-          </div>
-          <div>
-            <h2 class="text-xs font-semibold uppercase tracking-[0.18em] text-[#a6e3a1]">
-              Execution order
-            </h2>
-            <div class="mt-2 flex max-h-12 flex-wrap gap-1.5 overflow-hidden">
-              <span
-                :for={{query, index} <- Enum.with_index(@plan.query_order, 1)}
-                class="border border-[#89dceb]/20 bg-[#89dceb]/10 px-2 py-0.5 text-[0.68rem] font-semibold text-[#89dceb]"
-              >
-                {index}. {query}
-              </span>
-            </div>
-          </div>
-        </div>
+          class="dashboard-info-backdrop fixed inset-0 z-40 bg-[#11111b]/45 transition-opacity"
+          data-close-dashboard-info
+        />
 
-        <div id="panel-grid" class="grid gap-3 xl:grid-cols-2 2xl:grid-cols-3">
+        <aside
+          id="dashboard-info-drawer"
+          class="dashboard-info-drawer fixed right-0 top-[4.5rem] z-50 h-[calc(100vh-4.5rem)] w-full max-w-md overflow-auto border-l border-[#b4befe]/20 bg-[#11111b]/95 p-4 shadow-2xl shadow-black/40 transition-transform duration-200"
+        >
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <p class="text-[0.65rem] font-semibold uppercase tracking-[0.22em] text-[#89dceb]">
+                Dashboard Info
+              </p>
+              <h2 class="mt-1 text-lg font-semibold text-[#cdd6f4]">
+                {get_in(@dashboard, ["metadata", "title"]) || get_in(@dashboard, ["metadata", "name"])}
+              </h2>
+            </div>
+            <button
+              type="button"
+              aria-label="Close dashboard information"
+              data-close-dashboard-info
+              class="grid size-8 place-items-center border border-[#b4befe]/20 text-[#bac2de] transition hover:border-[#f5c2e7]/50 hover:text-[#f5c2e7]"
+            >
+              <.icon name="hero-x-mark" class="size-4" />
+            </button>
+          </div>
+
+          <div class="mt-4 grid grid-cols-2 gap-2 text-xs">
+            <div class="mocha-chip px-3 py-2">
+              <p class="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#9399b2]">
+                Queries
+              </p>
+              <p class="mt-1 text-lg font-semibold text-[#cdd6f4]">
+                {map_size(Map.get(@dashboard, "queries", %{}))}
+              </p>
+            </div>
+            <div class="mocha-chip px-3 py-2">
+              <p class="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#9399b2]">
+                Panels
+              </p>
+              <p class="mt-1 text-lg font-semibold text-[#cdd6f4]">
+                {length(Map.get(@dashboard, "panels", []))}
+              </p>
+            </div>
+          </div>
+
+          <div :if={@plan} id="execution-plan" class="mt-4 space-y-4">
+            <section class="mocha-panel p-3">
+              <h3 class="text-xs font-semibold uppercase tracking-[0.18em] text-[#f9e2af]">
+                Datasources
+              </h3>
+              <div class="mt-2 flex flex-wrap gap-1.5">
+                <span
+                  :for={{alias_name, datasource} <- @plan.datasource_aliases}
+                  class="mocha-chip px-2 py-0.5 text-[0.68rem] font-semibold"
+                >
+                  {alias_name} → {datasource.ref}
+                </span>
+              </div>
+            </section>
+            <section class="mocha-panel p-3">
+              <h3 class="text-xs font-semibold uppercase tracking-[0.18em] text-[#a6e3a1]">
+                Execution order
+              </h3>
+              <div class="mt-2 flex max-h-72 flex-col gap-1.5 overflow-auto">
+                <span
+                  :for={{query, index} <- Enum.with_index(@plan.query_order, 1)}
+                  class="border border-[#89dceb]/20 bg-[#89dceb]/10 px-2 py-1 text-[0.68rem] font-semibold text-[#89dceb]"
+                >
+                  {index}. {query}
+                </span>
+              </div>
+            </section>
+          </div>
+
+          <div
+            :if={!@plan}
+            class="mt-4 border border-[#b4befe]/15 bg-[#181825]/70 p-3 text-xs text-[#a6adc8]"
+          >
+            Run the dashboard to populate datasource and execution details.
+          </div>
+        </aside>
+
+        <div
+          id="panel-grid"
+          class="panel-grid grid gap-3"
+          style={"--panel-columns: #{dashboard_columns(@dashboard)}"}
+        >
           <article
             :for={panel <- Map.get(@dashboard, "panels", [])}
             id={"panel-#{panel["id"]}"}
             data-stacked={stacked_attr(panel)}
+            data-legend-position={legend_position(panel)}
+            data-layout-width={panel_width(panel, @dashboard)}
+            data-layout-height={panel_height(panel, 160)}
+            style={"--panel-width: #{panel_width(panel, @dashboard)}"}
             class={[
               "mocha-card sharp-corner p-3 transition duration-300",
-              panel["type"] == "row" && "xl:col-span-2 2xl:col-span-3"
+              panel["type"] == "row" && ""
             ]}
           >
             <div class="mb-2 flex items-center gap-1.5">
@@ -470,6 +529,8 @@ defmodule ObserveWeb.DashboardShowLive do
   def timeseries_chart(assigns) do
     assigns = assign(assigns, :chart_json, Jason.encode!(chart_payload(assigns.rows)))
     assigns = assign(assigns, :stacked, stacked_attr(assigns.panel))
+    assigns = assign(assigns, :legend_position, legend_position(assigns.panel))
+    assigns = assign(assigns, :height, panel_height(assigns.panel, 160))
 
     ~H"""
     <div
@@ -477,8 +538,9 @@ defmodule ObserveWeb.DashboardShowLive do
       phx-hook="D3Timeseries"
       phx-update="ignore"
       data-chart={@chart_json}
-      data-height="160"
+      data-height={@height}
       data-stacked={@stacked}
+      data-legend-position={@legend_position}
       class="relative min-h-40 border border-[#89dceb]/20 bg-[#11111b]/45 p-2"
     />
     """
@@ -537,6 +599,47 @@ defmodule ObserveWeb.DashboardShowLive do
 
   defp stacked_attr(%{"stacked" => true}), do: "true"
   defp stacked_attr(_panel), do: "false"
+
+  defp dashboard_columns(dashboard) do
+    dashboard
+    |> get_in(["layout", "columns"])
+    |> bounded_integer(3, 1, 16)
+  end
+
+  defp panel_width(%{"type" => "row"}, dashboard), do: dashboard_columns(dashboard)
+
+  defp panel_width(panel, dashboard) do
+    columns = dashboard_columns(dashboard)
+
+    case get_in(panel, ["layout", "width"]) do
+      "full" -> columns
+      width -> bounded_integer(width, 1, 1, columns)
+    end
+  end
+
+  defp panel_height(panel, default) do
+    panel
+    |> get_in(["layout", "height"])
+    |> bounded_integer(default, 120, 800)
+  end
+
+  defp bounded_integer(value, _default, min, max) when is_integer(value),
+    do: value |> Kernel.max(min) |> Kernel.min(max)
+
+  defp bounded_integer(value, default, min, max) when is_binary(value) do
+    case Integer.parse(value) do
+      {integer, ""} -> bounded_integer(integer, default, min, max)
+      _invalid -> default
+    end
+  end
+
+  defp bounded_integer(_value, default, _min, _max), do: default
+
+  defp legend_position(%{"legend" => %{"position" => position}})
+       when position in ["top", "bottom", "left", "right"],
+       do: position
+
+  defp legend_position(_panel), do: "bottom"
 
   defp panel_description(%{"description" => description})
        when is_binary(description) and description != "",

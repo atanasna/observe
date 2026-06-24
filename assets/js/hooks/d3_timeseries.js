@@ -34,10 +34,12 @@ export const D3Timeseries = {
     this.frame = null
     const payload = JSON.parse(this.el.dataset.chart || "{\"series\":[]}")
     const stacked = this.el.dataset.stacked === "true"
+    const legendPosition = legendPositionValue(this.el.dataset.legendPosition)
+    const sideLegend = legendPosition === "left" || legendPosition === "right"
     const style = getComputedStyle(this.el)
     const horizontalPadding = parseFloat(style.paddingLeft || 0) + parseFloat(style.paddingRight || 0)
     const measuredWidth = this.el.getBoundingClientRect().width - horizontalPadding
-    const width = Math.max(measuredWidth || 640, 320)
+    const width = Math.max((measuredWidth || 640) - (sideLegend ? 180 : 0), 320)
     const fullscreen = document.fullscreenElement === this.el
     const height = fullscreen ? Math.max(window.innerHeight - 120, 320) : Math.max(Number(this.el.dataset.height || 160), 120)
     const margin = {top: 14, right: 12, bottom: 22, left: 42}
@@ -111,7 +113,25 @@ export const D3Timeseries = {
       .y(point => y(point[1]))
       .curve(d3.curveMonotoneX)
 
-    const svg = d3.select(this.el)
+    const chartBody = document.createElement("div")
+    chartBody.className = chartBodyClass(legendPosition)
+    this.el.appendChild(chartBody)
+
+    const svgHost = document.createElement("div")
+    svgHost.className = "min-w-0 flex-1"
+
+    const legendHost = document.createElement("div")
+    legendHost.className = legendClass(legendPosition)
+
+    if (legendPosition === "top" || legendPosition === "left") {
+      chartBody.appendChild(legendHost)
+      chartBody.appendChild(svgHost)
+    } else {
+      chartBody.appendChild(svgHost)
+      chartBody.appendChild(legendHost)
+    }
+
+    const svg = d3.select(svgHost)
       .append("svg")
       .attr("width", "100%")
       .attr("height", height)
@@ -252,9 +272,7 @@ export const D3Timeseries = {
       .attr("fill-opacity", 0.18)
       .attr("stroke", "#89dceb")
 
-    const legend = d3.select(this.el)
-      .append("div")
-      .attr("class", "mt-2 grid max-h-28 gap-1.5 overflow-auto text-xs md:grid-cols-2")
+    const legend = d3.select(legendHost)
 
     payload.series.forEach((series, index) => {
       const isolated = this.selectedLabels.has(series.label)
@@ -323,6 +341,26 @@ function stackedPointTop(stackData, label, time) {
 
 function stackKey(label, time) {
   return `${label}\u0000${time}`
+}
+
+function legendPositionValue(value) {
+  return ["top", "bottom", "left", "right"].includes(value) ? value : "bottom"
+}
+
+function chartBodyClass(position) {
+  if (position === "left" || position === "right") {
+    return "flex min-w-0 flex-col gap-2 md:flex-row"
+  }
+
+  return "flex min-w-0 flex-col gap-2"
+}
+
+function legendClass(position) {
+  if (position === "left" || position === "right") {
+    return "grid max-h-40 gap-1.5 overflow-auto text-xs md:max-h-none md:w-44 md:shrink-0 md:grid-cols-1"
+  }
+
+  return "flex max-h-20 flex-wrap items-center gap-1.5 overflow-auto text-xs"
 }
 
 function bindGlobalResetButton() {

@@ -60,7 +60,14 @@ defmodule ObserveWeb.Layouts do
       <div class="flex-none">
         <ul class="flex flex-column items-center space-x-2 px-1 sm:space-x-4">
           <li>
-            <.theme_toggle />
+            <button
+              id="toggle-dashboard-info"
+              type="button"
+              aria-label="Toggle dashboard information"
+              class="grid size-10 place-items-center border border-[#b4befe]/20 bg-[#181825]/95 text-[#89dceb] transition hover:border-[#cba6f7]/50 hover:bg-[#313244] hover:text-[#f5c2e7]"
+            >
+              <.icon name="hero-information-circle" class="size-5" />
+            </button>
           </li>
         </ul>
       </div>

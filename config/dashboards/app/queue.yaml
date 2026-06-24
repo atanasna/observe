@@ -20,11 +20,14 @@ datasources:
   prometheus:
     ref: ${vars.source}
 
+layout:
+  columns: 16
+
 queryRefs:
   - queue
 
 datasets:
-  # Pending
+  # Pending Jobs
   queue_low_pending:
     query: queue
     label: Low
@@ -53,7 +56,7 @@ datasets:
       deployment: ${vars.deployment}
       state: "pending"
       priority: "bulk"
-  # Running
+  # Running Jobs
   queue_low_running:
     query: queue
     label: Low
@@ -82,7 +85,7 @@ datasets:
       deployment: ${vars.deployment}
       state: "running"
       priority: "bulk"
-  # Delayed
+  # Delayed Jobs
   queue_low_delayed:
     query: queue
     label: Low
@@ -118,29 +121,37 @@ panels:
     description: Pending queue size by priority for the selected deployment.
     type: timeseries
     stacked: true
+    layout:
+      width: full
+      height: 300
     datasets:
       - queue_default_pending
       - queue_low_pending
       - queue_high_pending
       - queue_bulk_pending
-  - id: delayed
-    description: Delayed queue size by priority for the selected deployment.
-    title: Delayed
-    type: timeseries
-    stacked: true
-    datasets:
-      - queue_default_delayed
-      - queue_low_delayed
-      - queue_high_delayed
-      - queue_bulk_delayed
   - id: running
     title: Running
     description: Running queue size by priority for the selected deployment.
     type: timeseries
     stacked: true
+    layout:
+      width: 8
+      height: 240
     datasets:
       - queue_default_running
       - queue_low_running
       - queue_high_running
       - queue_bulk_running
-
+  - id: delayed
+    description: Delayed queue size by priority for the selected deployment.
+    title: Delayed
+    type: timeseries
+    stacked: true
+    layout:
+      width: 8
+      height: 240
+    datasets:
+      - queue_default_delayed
+      - queue_low_delayed
+      - queue_high_delayed
+      - queue_bulk_delayed

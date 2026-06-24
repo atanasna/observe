@@ -42,15 +42,35 @@ const Hooks = {
         const collapsed = this.el.classList.toggle("sidebar-collapsed")
         localStorage.setItem(this.storageKey, collapsed ? "collapsed" : "open")
       }
+      this.toggleInfo = event => {
+        const button = event.target.closest("#toggle-dashboard-info")
+
+        if (!button) return
+
+        event.preventDefault()
+        this.el.classList.toggle("dashboard-info-open")
+      }
+      this.closeInfo = event => {
+        const button = event.target.closest("[data-close-dashboard-info]")
+
+        if (!button) return
+
+        event.preventDefault()
+        this.el.classList.remove("dashboard-info-open")
+      }
 
       this.applyState()
       document.addEventListener("click", this.toggle)
+      document.addEventListener("click", this.toggleInfo)
+      document.addEventListener("click", this.closeInfo)
     },
     updated() {
       this.applyState()
     },
     destroyed() {
       document.removeEventListener("click", this.toggle)
+      document.removeEventListener("click", this.toggleInfo)
+      document.removeEventListener("click", this.closeInfo)
     },
     applyState() {
       const state = localStorage.getItem(this.storageKey) || "collapsed"

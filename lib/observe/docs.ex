@@ -645,6 +645,13 @@ defmodule Observe.Docs do
         text(
           "Panels are intentionally thin. They describe how to visualize a dataset, not how to fetch or prepare the data."
         ),
+        table("Dashboard layout options", ["Option", "Required", "Description"], [
+          [
+            "layout.columns",
+            "No",
+            "Number of grid columns available at wide breakpoints. Defaults to 3 and is capped at 16."
+          ]
+        ]),
         table("Panel options", ["Option", "Required", "Description"], [
           ["id", "Yes", "Stable panel identifier used in DOM IDs."],
           ["title", "Yes", "Human-readable panel title."],
@@ -672,6 +679,22 @@ defmodule Observe.Docs do
             "stacked",
             "No",
             "For timeseries panels, render visible series as a stacked area chart when true."
+          ],
+          ["legend", "No", "Timeseries legend options, such as position."],
+          [
+            "legend.position",
+            "No",
+            "Place the legend at top, bottom, left, or right. Defaults to bottom."
+          ],
+          [
+            "layout.width",
+            "No",
+            "Number of dashboard grid columns to span, or full. Defaults to 1."
+          ],
+          [
+            "layout.height",
+            "No",
+            "Timeseries chart height in pixels. Defaults to 160 and is clamped between 120 and 800."
           ]
         ]),
         code("Panels", """
@@ -687,6 +710,9 @@ defmodule Observe.Docs do
             dataset: error_logs
         """),
         code("Panel with multiple datasets", """
+        layout:
+          columns: 16
+
         datasets:
           queue_default_pending:
             query: queue
@@ -708,6 +734,11 @@ defmodule Observe.Docs do
             description: Pending queue size by priority for the selected deployment.
             type: timeseries
             stacked: true
+            legend:
+              position: right
+            layout:
+              width: full
+              height: 320
             datasets:
               - queue_default_pending
               - queue_low_pending

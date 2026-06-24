@@ -11,6 +11,7 @@ defmodule ObserveWeb.DashboardShowLiveTest do
     assert has_element?(view, "#dashboard-end-time")
     assert has_element?(view, "#dashboard-refresh-interval")
     assert has_element?(view, "#reset-timeseries-zoom")
+    assert has_element?(view, "#toggle-dashboard-info")
   end
 
   test "renders prometheus datasource variable selector", %{conn: conn} do
@@ -26,6 +27,7 @@ defmodule ObserveWeb.DashboardShowLiveTest do
 
     assert has_element?(view, "#refresh-dashboard")
     assert has_element?(view, "#panel-grid")
+    assert has_element?(view, "#dashboard-info-drawer")
   end
 
   test "renders queue dashboard with dependent variable selector and one panel", %{conn: conn} do
@@ -35,6 +37,9 @@ defmodule ObserveWeb.DashboardShowLiveTest do
     assert has_element?(view, "#variables_deployment")
     assert has_element?(view, "#panel-pending")
     assert has_element?(view, ~s(#panel-pending[data-stacked="true"]))
+    assert has_element?(view, ~s(#panel-pending[data-legend-position="bottom"]))
+    assert has_element?(view, ~s(#panel-pending[data-layout-width="16"]))
+    assert has_element?(view, ~s(#panel-pending[data-layout-height="300"]))
     assert has_element?(view, ~s(#panel-pending button[aria-label="Panel description"]))
     assert render(view) =~ "Pending queue size by priority"
   end

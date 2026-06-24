@@ -249,6 +249,42 @@ body {
   background: rgb(69 71 90 / 0.55);
 }
 
+.panel-grid {
+  grid-template-columns: 1fr;
+}
+
+.panel-grid > article {
+  grid-column: span 1 / span 1;
+}
+
+.dashboard-info-drawer {
+  transform: translateX(calc(100% + 1rem));
+}
+
+.dashboard-info-backdrop {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.dashboard-info-open .dashboard-info-drawer {
+  transform: translateX(0);
+}
+
+.dashboard-info-open .dashboard-info-backdrop {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (min-width: 1280px) {
+  .panel-grid {
+    grid-template-columns: repeat(var(--panel-columns, 3), minmax(0, 1fr));
+  }
+
+  .panel-grid > article {
+    grid-column: span var(--panel-width, 1) / span var(--panel-width, 1);
+  }
+}
+
 .tree-arrow {
   transition: transform 140ms ease, color 140ms ease;
 }
