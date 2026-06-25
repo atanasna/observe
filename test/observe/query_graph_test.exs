@@ -13,7 +13,7 @@ defmodule Observe.QueryGraphTest do
     assert get_in(datasources, ["eu-charge", "_meta", "folder"]) == "real"
     assert get_in(queries, ["queue_size", "_meta", "folder"]) == "applications/queues"
     assert get_in(datasets, ["queue_default_pending", "_meta", "folder"]) == "applications/queues"
-    assert get_in(dashboards, ["laravel", "_meta", "folder"]) == "applications"
+    assert get_in(dashboards, ["laravel", "_meta", "folder"]) == "Apps/Ampeco"
   end
 
   test "loads panel dataset legend formats for panel display" do
@@ -56,12 +56,12 @@ defmodule Observe.QueryGraphTest do
     panel =
       dashboards
       |> get_in(["queue", "panels"])
-      |> Enum.find(&(Map.get(&1, "id") == "execution-time"))
+      |> Enum.find(&(Map.get(&1, "id") == "execution-time-default"))
 
     assert get_in(panel, ["legend", "format"]) == nil
 
     assert get_in(panel, ["datasets", Access.at(0), "legend", "format"]) ==
-             "{{tenant}} - {{priority}} - {{exported_job}}"
+             "{{tenant}} - {{exported_job}}"
   end
 
   test "queue tenant variable is scoped by selected deployment" do

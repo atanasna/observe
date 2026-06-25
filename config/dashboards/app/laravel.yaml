@@ -4,7 +4,7 @@ kind: Dashboard
 metadata:
   name: laravel
   title: Laravel
-  folder: applications
+  folder: Apps/Ampeco
 
 variables:
   source:

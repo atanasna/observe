@@ -7,6 +7,8 @@ defmodule ObserveWeb.DashboardShowLive do
   alias Observe.TimeRange
   alias Observe.Variables
 
+  @var_ref_regex ~r/\$\{vars\.([A-Za-z0-9_\-]+)(?:\.[A-Za-z0-9_\-]+)*\}/
+
   @impl true
   def mount(%{"name" => name} = params, _session, socket) do
     case Store.get_dashboard(name) do
@@ -40,6 +42,7 @@ defmodule ObserveWeb.DashboardShowLive do
          |> assign(:run_ref, nil)
          |> assign(:run_id, nil)
          |> assign(:loading?, false)
+         |> assign(:loading_datasets, MapSet.new())
          |> assign(:collapsed_sections, collapsed_sections(dashboard))
          |> assign(:plan, nil)
          |> assign(:datasets, %{})
@@ -76,7 +79,7 @@ defmodule ObserveWeb.DashboardShowLive do
     socket =
       socket
       |> assign(:variable_options, variable_options)
-      |> start_dashboard_run(variable_values)
+      |> start_variable_dashboard_run(variable_values)
 
     {:noreply, socket}
   end
@@ -212,7 +215,7 @@ defmodule ObserveWeb.DashboardShowLive do
   end
 
   def handle_info({:dashboard_complete, run_id}, %{assigns: %{run_id: run_id}} = socket) do
-    {:noreply, assign(socket, :loading?, false)}
+    {:noreply, socket |> assign(:loading?, false) |> assign(:loading_datasets, MapSet.new())}
   end
 
   def handle_info({:dashboard_plan, _run_id, _plan}, socket), do: {:noreply, socket}
@@ -234,11 +237,16 @@ defmodule ObserveWeb.DashboardShowLive do
           socket
           |> assign(:plan, nil)
           |> assign(:datasets, %{})
+          |> assign(:loading_datasets, MapSet.new())
           |> assign(:error, reason)
       end
 
     {:noreply,
-     socket |> assign(:loading?, false) |> assign(:run_ref, nil) |> assign(:run_id, nil)}
+     socket
+     |> assign(:loading?, false)
+     |> assign(:loading_datasets, MapSet.new())
+     |> assign(:run_ref, nil)
+     |> assign(:run_id, nil)}
   end
 
   def handle_info({ref, _result}, socket) when is_reference(ref), do: {:noreply, socket}
@@ -247,6 +255,7 @@ defmodule ObserveWeb.DashboardShowLive do
     {:noreply,
      socket
      |> assign(:loading?, false)
+     |> assign(:loading_datasets, MapSet.new())
      |> assign(:run_ref, nil)
      |> assign(:run_id, nil)
      |> assign(:error, "dashboard run failed: #{inspect(reason)}")}
@@ -254,13 +263,18 @@ defmodule ObserveWeb.DashboardShowLive do
 
   def handle_info({:DOWN, _ref, :process, _pid, _reason}, socket), do: {:noreply, socket}
 
-  defp start_dashboard_run(socket, variable_values) do
+  defp start_dashboard_run(socket, variable_values),
+    do: start_dashboard_run(socket, variable_values, :all)
+
+  defp start_dashboard_run(socket, variable_values, only) do
     caller = self()
     run_id = make_ref()
 
-    opts = %{
-      time_range: selected_time_range(socket)
-    }
+    opts =
+      %{
+        time_range: selected_time_range(socket)
+      }
+      |> maybe_put_only(only)
 
     task =
       start_query_task(fn ->
@@ -274,12 +288,110 @@ defmodule ObserveWeb.DashboardShowLive do
     socket
     |> assign(:variable_values, variable_values)
     |> assign(:loading?, true)
+    |> assign(:loading_datasets, loading_datasets(only))
     |> assign(:run_ref, task.ref)
     |> assign(:run_id, run_id)
     |> assign(:plan, nil)
-    |> assign(:datasets, %{})
+    |> maybe_clear_datasets(only)
     |> assign(:error, nil)
   end
+
+  defp maybe_put_only(opts, :all), do: opts
+  defp maybe_put_only(opts, only), do: Map.put(opts, :only, only)
+
+  defp loading_datasets(:all), do: nil
+  defp loading_datasets(only), do: MapSet.new(only)
+
+  defp maybe_clear_datasets(socket, :all), do: assign(socket, :datasets, %{})
+
+  defp maybe_clear_datasets(socket, only), do: update(socket, :datasets, &Map.drop(&1, only))
+
+  defp start_variable_dashboard_run(socket, variable_values) do
+    changed_vars = changed_variables(socket.assigns.variable_values, variable_values)
+
+    cond do
+      MapSet.size(changed_vars) == 0 ->
+        assign(socket, :variable_values, variable_values)
+
+      MapSet.member?(changed_vars, "source") ->
+        start_dashboard_run(socket, variable_values)
+
+      true ->
+        affected = affected_datasets(socket.assigns.dashboard, changed_vars)
+
+        if affected == [] do
+          assign(socket, :variable_values, variable_values)
+        else
+          start_dashboard_run(socket, variable_values, affected)
+        end
+    end
+  end
+
+  defp changed_variables(previous, current) do
+    previous
+    |> Map.keys()
+    |> Kernel.++(Map.keys(current))
+    |> Enum.uniq()
+    |> Enum.reduce(MapSet.new(), fn name, changed ->
+      if Map.get(previous, name) == Map.get(current, name) do
+        changed
+      else
+        MapSet.put(changed, name)
+      end
+    end)
+  end
+
+  defp affected_datasets(dashboard, changed_vars) do
+    datasets = Map.get(dashboard, "datasets", %{})
+
+    datasets
+    |> Enum.filter(fn {_name, dataset} -> depends_on_changed_var?(dataset, changed_vars) end)
+    |> Enum.map(fn {name, _dataset} -> name end)
+    |> MapSet.new()
+    |> include_dependent_datasets(datasets)
+    |> MapSet.to_list()
+  end
+
+  defp include_dependent_datasets(affected, datasets) do
+    next =
+      Enum.reduce(datasets, affected, fn {name, dataset}, acc ->
+        parent = source_dataset_name(dataset) || Map.get(dataset, "from")
+
+        if is_binary(parent) and MapSet.member?(acc, parent) do
+          MapSet.put(acc, name)
+        else
+          acc
+        end
+      end)
+
+    if MapSet.equal?(next, affected),
+      do: affected,
+      else: include_dependent_datasets(next, datasets)
+  end
+
+  defp depends_on_changed_var?(value, changed_vars) do
+    value
+    |> variable_refs()
+    |> Enum.any?(&MapSet.member?(changed_vars, &1))
+  end
+
+  defp variable_refs(value) when is_binary(value) do
+    @var_ref_regex
+    |> Regex.scan(value)
+    |> Enum.map(fn [_match, name] -> name end)
+  end
+
+  defp variable_refs(value) when is_map(value) do
+    value
+    |> Map.drop(["_meta"])
+    |> Enum.flat_map(fn {_key, val} -> variable_refs(val) end)
+  end
+
+  defp variable_refs(value) when is_list(value), do: Enum.flat_map(value, &variable_refs/1)
+  defp variable_refs(_value), do: []
+
+  defp source_dataset_name(%{"source" => "dataset", "dataset" => %{"name" => name}}), do: name
+  defp source_dataset_name(_dataset), do: nil
 
   defp start_query_task(fun) do
     ensure_query_task_supervisor!()
@@ -434,7 +546,7 @@ defmodule ObserveWeb.DashboardShowLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash}>
+    <Layouts.app flash={@flash} breadcrumbs={dashboard_breadcrumbs(@dashboard)}>
       <section id="dashboard-show" class="space-y-3">
         <div class="dashboard-header-shell mocha-shell sharp-corner p-3 md:p-4">
           <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -606,90 +718,6 @@ defmodule ObserveWeb.DashboardShowLive do
         </div>
 
         <div
-          class="dashboard-info-backdrop fixed inset-0 z-40 bg-[#11111b]/45 transition-opacity"
-          data-close-dashboard-info
-        />
-
-        <aside
-          id="dashboard-info-drawer"
-          class="dashboard-info-drawer fixed right-0 top-[4.5rem] z-50 h-[calc(100vh-4.5rem)] w-full max-w-md overflow-auto border-l border-[#b4befe]/20 bg-[#11111b]/95 p-4 shadow-2xl shadow-black/40 transition-transform duration-200"
-        >
-          <div class="flex items-start justify-between gap-3">
-            <div>
-              <p class="text-[0.65rem] font-semibold uppercase tracking-[0.22em] text-[#89dceb]">
-                Dashboard Info
-              </p>
-              <h2 class="mt-1 text-lg font-semibold text-[#cdd6f4]">
-                {get_in(@dashboard, ["metadata", "title"]) || get_in(@dashboard, ["metadata", "name"])}
-              </h2>
-            </div>
-            <button
-              type="button"
-              aria-label="Close dashboard information"
-              data-close-dashboard-info
-              class="grid size-8 place-items-center border border-[#b4befe]/20 text-[#bac2de] transition hover:border-[#f5c2e7]/50 hover:text-[#f5c2e7]"
-            >
-              <.icon name="hero-x-mark" class="size-4" />
-            </button>
-          </div>
-
-          <div class="mt-4 grid grid-cols-2 gap-2 text-xs">
-            <div class="mocha-chip px-3 py-2">
-              <p class="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#9399b2]">
-                Queries
-              </p>
-              <p class="mt-1 text-lg font-semibold text-[#cdd6f4]">
-                {map_size(Map.get(@dashboard, "queries", %{}))}
-              </p>
-            </div>
-            <div class="mocha-chip px-3 py-2">
-              <p class="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#9399b2]">
-                Panels
-              </p>
-              <p class="mt-1 text-lg font-semibold text-[#cdd6f4]">
-                {length(Map.get(@dashboard, "panels", []))}
-              </p>
-            </div>
-          </div>
-
-          <div :if={@plan} id="execution-plan" class="mt-4 space-y-4">
-            <section class="mocha-panel p-3">
-              <h3 class="text-xs font-semibold uppercase tracking-[0.18em] text-[#f9e2af]">
-                Datasources
-              </h3>
-              <div class="mt-2 flex flex-wrap gap-1.5">
-                <span
-                  :for={{alias_name, datasource} <- @plan.datasource_aliases}
-                  class="mocha-chip px-2 py-0.5 text-[0.68rem] font-semibold"
-                >
-                  {alias_name} → {datasource.ref}
-                </span>
-              </div>
-            </section>
-            <section class="mocha-panel p-3">
-              <h3 class="text-xs font-semibold uppercase tracking-[0.18em] text-[#a6e3a1]">
-                Execution order
-              </h3>
-              <div class="mt-2 flex max-h-72 flex-col gap-1.5 overflow-auto">
-                <span
-                  :for={{query, index} <- Enum.with_index(@plan.query_order, 1)}
-                  class="border border-[#89dceb]/20 bg-[#89dceb]/10 px-2 py-1 text-[0.68rem] font-semibold text-[#89dceb]"
-                >
-                  {index}. {query}
-                </span>
-              </div>
-            </section>
-          </div>
-
-          <div
-            :if={!@plan}
-            class="mt-4 border border-[#b4befe]/15 bg-[#181825]/70 p-3 text-xs text-[#a6adc8]"
-          >
-            Run the dashboard to populate datasource and execution details.
-          </div>
-        </aside>
-
-        <div
           id="panel-grid"
           class="panel-grid grid gap-3"
           style={"--panel-columns: #{dashboard_columns(@dashboard)}"}
@@ -704,13 +732,20 @@ defmodule ObserveWeb.DashboardShowLive do
             data-layout-height={panel_height(panel, 160)}
             style={"--panel-width: #{panel_width(panel, @dashboard)}"}
             class={[
-              "mocha-card sharp-corner transition duration-300",
-              if(panel["type"] == "row", do: "p-1.5", else: "p-3")
+              if(panel["type"] == "row",
+                do: "py-2",
+                else: "mocha-card sharp-corner p-3 transition duration-300"
+              )
             ]}
           >
             <div :if={panel["type"] != "row"} class="mb-2 flex items-center gap-1.5">
-              <h2 class="text-sm font-semibold text-[#cdd6f4]">{panel["title"]}</h2>
-              <span :if={panel_description(panel)} class="group relative inline-flex items-center">
+              <h2 class="text-sm font-semibold text-[#cdd6f4]">
+                {panel_title(panel, @dashboard, @variable_values, @datasources)}
+              </h2>
+              <span
+                :if={panel_description(panel, @dashboard, @variable_values, @datasources)}
+                class="group relative inline-flex items-center"
+              >
                 <button
                   type="button"
                   aria-label="Panel description"
@@ -719,12 +754,12 @@ defmodule ObserveWeb.DashboardShowLive do
                   <.icon name="hero-information-circle-micro" class="size-4" />
                 </button>
                 <span class="pointer-events-none absolute left-1/2 top-5 z-20 hidden w-64 -translate-x-1/2 border border-[#89dceb]/25 bg-[#11111b]/95 px-3 py-2 text-xs font-medium leading-5 text-[#cdd6f4] shadow-xl shadow-[#000]/30 group-hover:block group-focus-within:block">
-                  {panel_description(panel)}
+                  {panel_description(panel, @dashboard, @variable_values, @datasources)}
                 </span>
               </span>
             </div>
 
-            <%= if panel_loading?(panel, @datasets, @loading?) do %>
+            <%= if panel_loading?(panel, @datasets, @loading?, @loading_datasets) do %>
               <div class="flex min-h-28 items-center justify-center gap-3 border border-[#89dceb]/20 bg-[#89dceb]/10 p-4 text-xs font-semibold uppercase tracking-[0.16em] text-[#89dceb]">
                 <span class="inline-block size-4 animate-spin rounded-full border-2 border-[#89dceb]/25 border-t-[#89dceb]" />
                 Loading dataset
@@ -743,17 +778,21 @@ defmodule ObserveWeb.DashboardShowLive do
                       phx-click="toggle_panel_section"
                       phx-value-id={panel["id"]}
                       aria-expanded={!section_collapsed?(panel, @collapsed_sections) |> to_string()}
-                      class="flex w-full items-center justify-between border-l-2 border-[#cba6f7] bg-[#11111b]/40 px-2.5 py-1 text-left text-xs font-semibold uppercase tracking-[0.18em] text-[#f5c2e7] transition hover:border-[#f5c2e7] hover:bg-[#313244]/55"
+                      class="flex w-full items-center gap-3 text-left text-xs font-semibold uppercase tracking-[0.18em] text-[#cba6f7] focus:outline-none"
                     >
-                      <span>{panel["title"]}</span>
+                      <span class="h-px flex-1 bg-[#45475a]/70"></span>
+                      <span class="shrink-0">
+                        {panel_title(panel, @dashboard, @variable_values, @datasources)}
+                      </span>
                       <.icon
                         name={
                           if section_collapsed?(panel, @collapsed_sections),
                             do: "hero-chevron-right-micro",
                             else: "hero-chevron-down-micro"
                         }
-                        class="size-4 text-[#cba6f7]"
+                        class="size-4 shrink-0 text-[#cba6f7]"
                       />
+                      <span class="h-px flex-1 bg-[#45475a]/70"></span>
                     </button>
                   <% "stat" -> %>
                     <div class="sharp-corner bg-gradient-to-br from-[#cba6f7] via-[#89b4fa] to-[#94e2d5] p-4 text-[#11111b]">
@@ -764,6 +803,12 @@ defmodule ObserveWeb.DashboardShowLive do
                     </div>
                   <% "timeseries" -> %>
                     <.timeseries_chart
+                      id={"chart-#{panel["id"]}"}
+                      panel={panel}
+                      rows={panel_rows(panel, @datasets, @dashboard)}
+                    />
+                  <% "sunburst" -> %>
+                    <.sunburst_chart
                       id={"chart-#{panel["id"]}"}
                       panel={panel}
                       rows={panel_rows(panel, @datasets, @dashboard)}
@@ -835,6 +880,28 @@ defmodule ObserveWeb.DashboardShowLive do
     """
   end
 
+  attr :id, :string, required: true
+  attr :panel, :map, required: true
+  attr :rows, :list, required: true
+
+  def sunburst_chart(assigns) do
+    assigns =
+      assign(assigns, :chart_json, Jason.encode!(sunburst_payload(assigns.rows, assigns.panel)))
+
+    assigns = assign(assigns, :height, panel_height(assigns.panel, 160))
+
+    ~H"""
+    <div
+      id={@id}
+      phx-hook="D3Sunburst"
+      phx-update="ignore"
+      data-chart={@chart_json}
+      data-height={@height}
+      class="relative min-h-40 border border-[#cba6f7]/20 bg-[#11111b]/45 p-2"
+    />
+    """
+  end
+
   attr :rows, :list, required: true
 
   def data_table(assigns) do
@@ -895,6 +962,22 @@ defmodule ObserveWeb.DashboardShowLive do
     |> Enum.map(&Map.get(&1, "id"))
     |> Enum.reject(&is_nil/1)
     |> MapSet.new()
+  end
+
+  defp dashboard_breadcrumbs(dashboard) do
+    folder = get_in(dashboard, ["metadata", "folder"])
+    title = get_in(dashboard, ["metadata", "title"]) || get_in(dashboard, ["metadata", "name"])
+
+    folder_parts =
+      case folder do
+        value when is_binary(value) and value not in ["", "root"] ->
+          String.split(value, "/", trim: true)
+
+        _folder ->
+          []
+      end
+
+    folder_parts ++ [title]
   end
 
   defp visible_panels(dashboard, collapsed_sections) do
@@ -971,22 +1054,49 @@ defmodule ObserveWeb.DashboardShowLive do
 
   defp legend_position(_panel), do: "bottom"
 
-  defp panel_description(%{"description" => description})
-       when is_binary(description) and description != "",
-       do: description
+  defp panel_title(panel, dashboard, variable_values, datasources) do
+    panel
+    |> Map.get("title", Map.get(panel, "id", "Panel"))
+    |> interpolate_panel_text(dashboard, variable_values, datasources)
+  end
 
-  defp panel_description(_panel), do: nil
+  defp panel_description(%{"description" => description}, dashboard, variable_values, datasources)
+       when is_binary(description) and description != "" do
+    interpolate_panel_text(description, dashboard, variable_values, datasources)
+  end
 
-  defp panel_loading?(%{"type" => "row"}, _datasets, _loading?), do: false
+  defp panel_description(_panel, _dashboard, _variable_values, _datasources), do: nil
 
-  defp panel_loading?(%{"datasets" => panel_datasets}, datasets, true)
+  defp interpolate_panel_text(value, dashboard, variable_values, datasources)
+       when is_binary(value) do
+    dashboard
+    |> Map.get("variables", %{})
+    |> Variables.context(variable_values, datasources)
+    |> then(&Variables.interpolate(value, &1))
+  end
+
+  defp interpolate_panel_text(value, _dashboard, _variable_values, _datasources), do: value
+
+  defp panel_loading?(%{"type" => "row"}, _datasets, _loading?, _loading_datasets), do: false
+
+  defp panel_loading?(panel, _datasets, true, %MapSet{} = loading_datasets) do
+    if MapSet.size(loading_datasets) > 0 do
+      panel
+      |> panel_dataset_names()
+      |> Enum.any?(&MapSet.member?(loading_datasets, &1))
+    else
+      false
+    end
+  end
+
+  defp panel_loading?(%{"datasets" => panel_datasets}, datasets, true, _loading_datasets)
        when is_list(panel_datasets),
        do: Enum.any?(panel_datasets, &(not Map.has_key?(datasets, panel_dataset_name(&1))))
 
-  defp panel_loading?(%{"dataset" => dataset}, datasets, true),
+  defp panel_loading?(%{"dataset" => dataset}, datasets, true, _loading_datasets),
     do: not Map.has_key?(datasets, dataset)
 
-  defp panel_loading?(_panel, _datasets, _loading?), do: false
+  defp panel_loading?(_panel, _datasets, _loading?, _loading_datasets), do: false
 
   defp panel_error(panel, datasets, dashboard) do
     case PanelCompatibility.validate(panel, panel_rows(panel, datasets, dashboard)) do
@@ -1004,6 +1114,12 @@ defmodule ObserveWeb.DashboardShowLive do
   defp panel_dataset_name(dataset) when is_binary(dataset), do: dataset
   defp panel_dataset_name(%{"name" => dataset}) when is_binary(dataset), do: dataset
   defp panel_dataset_name(_dataset), do: nil
+
+  defp panel_dataset_names(%{"datasets" => panel_datasets}) when is_list(panel_datasets),
+    do: Enum.map(panel_datasets, &panel_dataset_name/1)
+
+  defp panel_dataset_names(%{"dataset" => dataset}) when is_binary(dataset), do: [dataset]
+  defp panel_dataset_names(_panel), do: []
 
   defp panel_dataset_legend_format(%{"legend" => %{"format" => format}}), do: format
   defp panel_dataset_legend_format(_dataset), do: nil
@@ -1066,6 +1182,52 @@ defmodule ObserveWeb.DashboardShowLive do
 
     %{series: series}
   end
+
+  defp sunburst_payload(rows, panel) do
+    levels = sunburst_levels(rows, panel)
+
+    root =
+      Enum.reduce(rows, %{"name" => "root", "children" => %{}}, fn row, root ->
+        value = numeric_value(Map.get(row, "value"))
+        path = Enum.map(levels, &to_string(Map.get(row, &1, "unknown")))
+        put_sunburst_value(root, path, value)
+      end)
+
+    %{root: finalize_sunburst_node(root), levels: levels}
+  end
+
+  defp sunburst_levels(_rows, %{"levels" => levels}) when is_list(levels), do: levels
+
+  defp sunburst_levels([], _panel), do: []
+
+  defp sunburst_levels([row | _rows], _panel) do
+    row
+    |> Map.drop(["time", "value", "raw_value", "dataset", "legend_format"])
+    |> Map.keys()
+    |> Enum.sort()
+  end
+
+  defp put_sunburst_value(node, [], value), do: Map.update(node, "value", value, &(&1 + value))
+
+  defp put_sunburst_value(node, [name | rest], value) do
+    children = Map.get(node, "children", %{})
+    child = Map.get(children, name, %{"name" => name, "children" => %{}})
+    child = put_sunburst_value(child, rest, value)
+    Map.put(node, "children", Map.put(children, name, child))
+  end
+
+  defp finalize_sunburst_node(%{"children" => children} = node) when map_size(children) > 0 do
+    children = children |> Map.values() |> Enum.map(&finalize_sunburst_node/1)
+
+    node
+    |> Map.put("children", children)
+    |> Map.put("value", Enum.reduce(children, 0, &(&2 + Map.get(&1, "value", 0))))
+  end
+
+  defp finalize_sunburst_node(node), do: Map.delete(node, "children")
+
+  defp numeric_value(value) when is_number(value), do: max(value, 0)
+  defp numeric_value(_value), do: 0
 
   defp group_series(points, panel) do
     {order, groups} =

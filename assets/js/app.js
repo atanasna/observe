@@ -24,11 +24,13 @@ import {Socket} from "phoenix"
 import {LiveSocket} from "phoenix_live_view"
 import {hooks as colocatedHooks} from "phoenix-colocated/observe"
 import topbar from "../vendor/topbar"
+import {D3Sunburst} from "./hooks/d3_sunburst"
 import {D3Timeseries} from "./hooks/d3_timeseries"
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const Hooks = {
   ...colocatedHooks,
+  D3Sunburst,
   D3Timeseries,
   SidebarState: {
     mounted() {
@@ -42,35 +44,26 @@ const Hooks = {
         const collapsed = this.el.classList.toggle("sidebar-collapsed")
         localStorage.setItem(this.storageKey, collapsed ? "collapsed" : "open")
       }
-      this.toggleInfo = event => {
-        const button = event.target.closest("#toggle-dashboard-info")
+      this.closeSidebar = event => {
+        const backdrop = event.target.closest("[data-close-sidebar]")
 
-        if (!button) return
-
-        event.preventDefault()
-        this.el.classList.toggle("dashboard-info-open")
-      }
-      this.closeInfo = event => {
-        const button = event.target.closest("[data-close-dashboard-info]")
-
-        if (!button) return
+        if (!backdrop) return
 
         event.preventDefault()
-        this.el.classList.remove("dashboard-info-open")
+        this.el.classList.add("sidebar-collapsed")
+        localStorage.setItem(this.storageKey, "collapsed")
       }
 
       this.applyState()
       document.addEventListener("click", this.toggle)
-      document.addEventListener("click", this.toggleInfo)
-      document.addEventListener("click", this.closeInfo)
+      document.addEventListener("click", this.closeSidebar)
     },
     updated() {
       this.applyState()
     },
     destroyed() {
       document.removeEventListener("click", this.toggle)
-      document.removeEventListener("click", this.toggleInfo)
-      document.removeEventListener("click", this.closeInfo)
+      document.removeEventListener("click", this.closeSidebar)
     },
     applyState() {
       const state = localStorage.getItem(this.storageKey) || "collapsed"

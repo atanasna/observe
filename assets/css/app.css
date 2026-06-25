@@ -266,20 +266,7 @@ body {
   grid-column: span 1 / span 1;
 }
 
-.dashboard-info-drawer {
-  transform: translateX(calc(100% + 1rem));
-}
-
-.dashboard-info-backdrop {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.dashboard-info-open .dashboard-info-drawer {
-  transform: translateX(0);
-}
-
-.dashboard-info-open .dashboard-info-backdrop {
+.sidebar-backdrop {
   opacity: 1;
   pointer-events: auto;
 }
@@ -308,19 +295,19 @@ body {
 }
 
 .app-content {
-  transition: padding-left 180ms ease;
+  transition: filter 180ms ease, opacity 180ms ease;
 }
 
 .sidebar-collapsed .app-sidebar {
   transform: translateX(calc(-100% - 1px));
 }
 
-@media (min-width: 1024px) {
-  .app-content {
-    padding-left: 16rem;
-  }
+.sidebar-collapsed .sidebar-backdrop {
+  opacity: 0;
+  pointer-events: none;
+}
 
-  .sidebar-collapsed .app-content {
-    padding-left: 0;
-  }
+#app-frame:not(.sidebar-collapsed) .app-content {
+  filter: grayscale(0.4) blur(1px);
+  opacity: 0.72;
 }

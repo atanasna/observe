@@ -3,7 +3,7 @@ defmodule Observe.PanelCompatibility do
   Runtime compatibility checks between panel types and returned dataset rows.
   """
 
-  @known_types ~w(row table stat timeseries bargauge state-timeline)
+  @known_types ~w(row table stat timeseries bargauge state-timeline sunburst)
 
   def validate(%{"type" => type}, _rows) when type not in @known_types do
     {:error, "Unknown panel type #{inspect(type)}"}
@@ -12,6 +12,7 @@ defmodule Observe.PanelCompatibility do
   def validate(%{"type" => "row"}, _rows), do: :ok
   def validate(%{"type" => "table"}, _rows), do: :ok
   def validate(%{"type" => "stat"}, _rows), do: :ok
+  def validate(%{"type" => "sunburst"}, _rows), do: :ok
   def validate(%{"type" => "timeseries"}, []), do: :ok
 
   def validate(%{"type" => "timeseries"}, rows) do

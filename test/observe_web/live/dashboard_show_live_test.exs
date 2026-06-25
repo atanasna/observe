@@ -12,7 +12,7 @@ defmodule ObserveWeb.DashboardShowLiveTest do
     assert has_element?(view, ~s(#dashboard-time-picker[phx-hook="TimePicker"]))
     assert has_element?(view, ~s(#dashboard-time-picker [data-close-time-picker]))
     assert has_element?(view, "#dashboard-refresh-interval")
-    assert has_element?(view, "#toggle-dashboard-info")
+    refute has_element?(view, "#toggle-dashboard-info")
   end
 
   test "renders prometheus datasource variable selector", %{conn: conn} do
@@ -28,7 +28,7 @@ defmodule ObserveWeb.DashboardShowLiveTest do
 
     refute has_element?(view, "#refresh-dashboard")
     assert has_element?(view, "#panel-grid")
-    assert has_element?(view, "#dashboard-info-drawer")
+    refute has_element?(view, "#dashboard-info-drawer")
   end
 
   test "renders queue dashboard with dependent variables and collapsible panel sections", %{
@@ -36,6 +36,8 @@ defmodule ObserveWeb.DashboardShowLiveTest do
   } do
     {:ok, view, _html} = live(conn, ~p"/dashboards/queue")
 
+    assert render(view) =~ "Applications"
+    assert render(view) =~ "Queue"
     assert has_element?(view, "#variables_source")
     assert has_element?(view, "#variables_deployment")
     assert has_element?(view, "#variables_tenant")
@@ -45,15 +47,18 @@ defmodule ObserveWeb.DashboardShowLiveTest do
     assert has_element?(view, ~s(#panel-pending[data-layout-width="16"]))
     assert has_element?(view, ~s(#panel-pending[data-layout-height="300"]))
     assert has_element?(view, ~s(#panel-pending button[aria-label="Panel description"]))
-    assert has_element?(view, ~s(#panel-experimental[data-section-collapsed="true"]))
+    assert has_element?(view, ~s(#panel-ana-metrics[data-section-collapsed="true"]))
     refute has_element?(view, "#panel-jobs-execution-time-default")
     assert render(view) =~ "Pending queue size by priority"
 
     view
-    |> element("#section-toggle-experimental")
+    |> element("#section-toggle-ana-metrics")
     |> render_click()
 
-    assert has_element?(view, ~s(#panel-experimental[data-section-collapsed="false"]))
-    assert has_element?(view, "#panel-execution-time")
+    assert has_element?(view, ~s(#panel-ana-metrics[data-section-collapsed="false"]))
+    assert has_element?(view, "#panel-execution-time-default")
+    assert has_element?(view, ~s(#panel-preassure-pie[data-layout-width="4"]))
+    assert render(view) =~ "Preassure Breakdown :"
+    refute render(view) =~ "${vars.priority}"
   end
 end

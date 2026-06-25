@@ -35,3 +35,19 @@ queries:
           rate(app_queue_job_count{deployment=~"${inputs.deployment}",tenant=~"${inputs.tenant}",priority=~"${inputs.priority}",type="processed", exported_job=~"${inputs.job}"}[2m])) 
           != +Inf
         )
+  queue_jobs_preasure:
+    description: Job preassure for processed jobs
+    datasource: prometheus
+    inputs:
+      deployment: {}
+      tenant: {}
+      priority: {}
+    request:
+      range: true
+      interval: 1m
+      query: |
+        topk(10,
+          rate(app_queue_job_execution_time{deployment=~"${inputs.deployment}",tenant=~"${inputs.tenant}",priority=~"${inputs.priority}"}[2m])
+          / ignoring(type) rate(app_queue_job_count{deployment=~"${inputs.deployment}",tenant=~"${inputs.tenant}",priority=~"${inputs.priority}",type="processed"}[2m])
+          * ignoring(type) group_left rate(app_queue_job_count{deployment=~"${inputs.deployment}",tenant=~"${inputs.tenant}",priority=~"${inputs.priority}",type="processed"}[2m])
+        )

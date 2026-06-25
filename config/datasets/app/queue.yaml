@@ -155,3 +155,34 @@ datasets:
         tenant: ${inputs.tenant}
         job: ${inputs.job}
         priority: default
+
+  queue_high_jobs_et:
+    no_value: 0
+    fill_missing: 0
+    inputs:
+      deployment: {}
+      tenant: {}
+      job: {}
+    source: query
+    query:
+      name: queue_jobs_et
+      inputs:
+        deployment: ${inputs.deployment}
+        tenant: ${inputs.tenant}
+        job: ${inputs.job}
+        priority: high
+
+  queue_jobs_preasure:
+    no_value: 0
+    fill_missing: 0
+    inputs:
+      deployment: {}
+      tenant: {}
+      priority: {}
+    source: query
+    query:
+      name: queue_jobs_preasure
+      inputs:
+        deployment: ${inputs.deployment}
+        tenant: ${inputs.tenant}
+        priority: ${inputs.priority}

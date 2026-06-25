@@ -31,6 +31,8 @@ defmodule ObserveWeb.Layouts do
     default: nil,
     doc: "the current [scope](https://phoenix.hexdocs.pm/scopes.html)"
 
+  attr :breadcrumbs, :list, default: [], doc: "top bar breadcrumb labels"
+
   slot :inner_block, required: true
 
   def app(assigns) do
@@ -38,55 +40,56 @@ defmodule ObserveWeb.Layouts do
 
     ~H"""
     <div class="mocha-grid-bg fixed inset-0 -z-10 opacity-60" />
-    <header class="sticky top-0 z-50 flex items-center justify-between border-b border-[#b4befe]/10 bg-[#11111b]/80 px-4 py-3 backdrop-blur-xl sm:px-6 lg:px-8">
-      <div class="flex flex-1 items-center gap-3">
-        <button
-          id="toggle-sidebar"
-          type="button"
-          aria-label="Toggle navigation"
-          class="grid size-10 place-items-center border border-[#b4befe]/20 bg-[#181825]/95 text-[#89dceb] transition hover:border-[#cba6f7]/50 hover:bg-[#313244] hover:text-[#f5c2e7]"
-        >
-          <span class="flex w-5 flex-col gap-1">
-            <span class="h-0.5 w-full bg-current" />
-            <span class="h-0.5 w-full bg-current" />
-            <span class="h-0.5 w-full bg-current" />
-          </span>
-        </button>
-        <a href="/dashboards" class="flex w-fit items-center gap-3">
-          <span class="sharp-corner grid size-10 place-items-center border border-[#f5c2e7]/40 bg-gradient-to-br from-[#cba6f7] via-[#89b4fa] to-[#94e2d5] text-sm font-black text-[#11111b]">O</span>
-          <span class="text-sm font-semibold tracking-wide text-[#cdd6f4]">Observe</span>
-        </a>
-      </div>
-      <div class="flex-none">
-        <ul class="flex flex-column items-center space-x-2 px-1 sm:space-x-4">
-          <li>
-            <button
-              id="toggle-dashboard-info"
-              type="button"
-              aria-label="Toggle dashboard information"
-              class="grid size-10 place-items-center border border-[#b4befe]/20 bg-[#181825]/95 text-[#89dceb] transition hover:border-[#cba6f7]/50 hover:bg-[#313244] hover:text-[#f5c2e7]"
-            >
-              <.icon name="hero-information-circle" class="size-5" />
-            </button>
-          </li>
-        </ul>
-      </div>
-    </header>
+    <div class="sticky top-0 z-50 flex h-10 items-center gap-3 border-b border-[#b4befe]/10 bg-[#11111b]/72 px-3 backdrop-blur-md sm:px-4 lg:px-6">
+      <button
+        id="toggle-sidebar"
+        type="button"
+        aria-label="Toggle navigation"
+        class="grid size-8 shrink-0 place-items-center border border-[#b4befe]/20 bg-[#181825]/75 text-[#89dceb] transition hover:border-[#cba6f7]/50 hover:bg-[#313244] hover:text-[#f5c2e7]"
+      >
+        <span class="flex w-4 flex-col gap-1">
+          <span class="h-0.5 w-full bg-current" />
+          <span class="h-0.5 w-full bg-current" />
+          <span class="h-0.5 w-full bg-current" />
+        </span>
+      </button>
+      <nav
+        id="top-breadcrumbs"
+        class="flex min-w-0 items-center gap-2 text-sm font-semibold text-[#cdd6f4]"
+      >
+        <%= if @breadcrumbs == [] do %>
+          <span class="truncate text-[#89dceb]">Observe</span>
+        <% else %>
+          <%= for {crumb, index} <- Enum.with_index(@breadcrumbs) do %>
+            <span :if={index > 0} class="text-[#6c7086]">›</span>
+            <span class={[
+              "truncate",
+              index == length(@breadcrumbs) - 1 && "text-[#f5c2e7]",
+              index < length(@breadcrumbs) - 1 && "text-[#89dceb]"
+            ]}>
+              {crumb}
+            </span>
+          <% end %>
+        <% end %>
+      </nav>
+    </div>
 
     <main
       id="app-frame"
       phx-hook="SidebarState"
-      class="sidebar-collapsed relative px-4 py-8 sm:px-6 lg:px-8"
+      class="sidebar-collapsed relative px-4 py-4 sm:px-6 lg:px-8"
     >
       <div>
+        <div
+          id="sidebar-backdrop"
+          class="sidebar-backdrop fixed inset-0 top-10 z-40 bg-[#11111b]/55 backdrop-blur-sm transition-opacity"
+          data-close-sidebar
+        />
         <aside
           id="app-sidebar"
-          class="app-sidebar mocha-card fixed left-0 top-[4.5rem] z-40 h-[calc(100vh-4.5rem)] w-60 border-l-0 p-3 transition-transform duration-200 ease-out"
+          class="app-sidebar mocha-card fixed left-0 top-10 z-50 h-[calc(100vh-2.5rem)] w-64 border-l-0 p-3 shadow-2xl shadow-black/50 transition-transform duration-200 ease-out"
         >
-          <p class="px-3 py-2 text-xs font-semibold uppercase tracking-[0.24em] text-[#89dceb]">
-            Navigation
-          </p>
-          <nav id="side-navigation" class="mt-2 space-y-1">
+          <nav id="side-navigation" class="space-y-1">
             <.link
               navigate={~p"/dashboards"}
               class="group flex items-center justify-between border border-transparent px-3 py-3 text-sm font-semibold text-[#bac2de] transition hover:border-[#f5c2e7]/25 hover:bg-[#313244]/70 hover:text-[#f5c2e7]"
@@ -129,7 +132,7 @@ defmodule ObserveWeb.Layouts do
           </nav>
         </aside>
         <div class="app-content min-w-0 space-y-4">
-          <div class="mx-auto max-w-7xl">
+          <div class="w-full">
             {render_slot(@inner_block)}
           </div>
         </div>

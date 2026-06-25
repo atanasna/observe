@@ -35,7 +35,35 @@ defmodule Observe.Executor do
   defp datasources(opts), do: Map.get(opts, :datasources) || Observe.Store.datasources()
 
   defp execute_plan(plan, opts, notify) do
-    execute_pending(plan.query_order, plan, %{}, opts, notify)
+    plan.query_order
+    |> filtered_query_order(plan, opts)
+    |> execute_pending(plan, %{}, opts, notify)
+  end
+
+  defp filtered_query_order(order, plan, opts) do
+    case Map.get(opts, :only) do
+      only when is_list(only) -> filter_query_order(order, plan, MapSet.new(only))
+      %MapSet{} = only -> filter_query_order(order, plan, only)
+      _only -> order
+    end
+  end
+
+  defp filter_query_order(order, plan, only) do
+    required = Enum.reduce(only, MapSet.new(), &put_required_query(&2, &1, plan))
+    Enum.filter(order, &MapSet.member?(required, &1))
+  end
+
+  defp put_required_query(required, name, plan) do
+    if MapSet.member?(required, name) do
+      required
+    else
+      required = MapSet.put(required, name)
+
+      case get_in(plan.queries, [name, "from"]) do
+        parent when is_binary(parent) -> put_required_query(required, parent, plan)
+        _parent -> required
+      end
+    end
   end
 
   defp execute_pending([], _plan, datasets, _opts, _notify), do: datasets

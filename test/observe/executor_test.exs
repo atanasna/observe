@@ -70,6 +70,42 @@ defmodule Observe.ExecutorTest do
     assert :ok = Task.await(task)
   end
 
+  test "runs only requested source datasets" do
+    assert {:ok, %{datasets: datasets}} =
+             Executor.run(source_dashboard(), %{}, %{
+               datasources: %{"fake-prometheus" => %{"type" => "prometheus"}},
+               only: MapSet.new(["alpha"]),
+               source_dataset: fn name, _query -> [%{"value" => name}] end
+             })
+
+    assert Map.keys(datasets) == ["alpha"]
+  end
+
+  test "includes parents needed by requested derived datasets" do
+    dashboard = %{
+      "variables" => %{},
+      "datasources" => %{"prometheus" => %{"ref" => "fake-prometheus"}},
+      "queries" => %{
+        "alpha" => %{"datasource" => "prometheus", "request" => %{"query" => "alpha"}},
+        "high_alpha" => %{
+          "from" => "alpha",
+          "transform" => [%{"filter" => %{"field" => "value", "gte" => 2}}]
+        }
+      },
+      "panels" => []
+    }
+
+    assert {:ok, %{datasets: datasets}} =
+             Executor.run(dashboard, %{}, %{
+               datasources: %{"fake-prometheus" => %{"type" => "prometheus"}},
+               only: ["high_alpha"],
+               source_dataset: fn "alpha", _query -> [%{"value" => 1}, %{"value" => 2}] end
+             })
+
+    assert Map.keys(datasets) |> Enum.sort() == ["alpha", "high_alpha"]
+    assert datasets["high_alpha"] == [%{"value" => 2}]
+  end
+
   test "normalizes no-value samples from dataset config" do
     dashboard = %{
       "variables" => %{},

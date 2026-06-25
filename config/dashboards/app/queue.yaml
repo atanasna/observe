@@ -4,12 +4,13 @@ kind: Dashboard
 metadata:
   name: queue
   title: Queue
-  folder: applications
+  folder: Applications
 
 variables:
   source:
     type: datasource
     datasource_type: prometheus
+    default: 
   deployment:
     type: label_values
     datasource: ${vars.source}
@@ -105,6 +106,18 @@ datasetRefs:
       deployment: ${vars.deployment}
       tenant: ${vars.tenant}
       job: ${vars.job}
+  queue_high_jobs_et:
+    dataset: queue_high_jobs_et
+    inputs:
+      deployment: ${vars.deployment}
+      tenant: ${vars.tenant}
+      job: ${vars.job}
+  queue_jobs_preasure:
+    dataset: queue_jobs_preasure
+    inputs:
+      deployment: ${vars.deployment}
+      tenant: ${vars.tenant}
+      priority: ${vars.priority}
 
 panels:
   - id: pending
@@ -177,13 +190,13 @@ panels:
         legend:
           format: Bulk
 
-  - id: experimental
-    title: Experimental
+  - id: ana-metrics
+    title: ANA Metrics
     type: row
-    collapsed: true
+    collapsed: false
 
-  - id: execution-time
-    title: Execution Time
+  - id: execution-time-default
+    title: "Execution Time : DEFAULT"
     description: Average execution time for the top 10 default-priority jobs by tenant and job.
     type: timeseries
     legend:
@@ -193,5 +206,46 @@ panels:
       height: 300 
     datasets:
       - name: queue_default_jobs_et
+        legend:
+          format: "{{tenant}} - {{exported_job}}"
+
+  - id: execution-time-high
+    title: "Execution Time : HIGH"
+    description: Average execution time for the top 10 high-priority jobs by tenant and job.
+    type: timeseries
+    legend:
+      position: right
+    layout:
+      width: 8
+      height: 300 
+    datasets:
+      - name: queue_high_jobs_et
+        legend:
+          format: "{{tenant}} - {{exported_job}}"
+
+  - id: preasure
+    title: "Preasure : ${vars.priority}"
+    description: asd
+    type: timeseries
+    legend:
+      position: right
+    layout:
+      width: 12 
+      height: 300 
+    datasets:
+      - name: queue_jobs_preasure
+        legend:
+          format: "{{tenant}} - {{priority}} - {{exported_job}}"
+
+  - id: preassure-pie
+    title: "Preassure Breakdown : ${vars.priority}"
+    description: Sunburst breakdown of job preassure by tenant, priority, and job.
+    type: sunburst
+    layout:
+      width: 4
+      height: 300
+    levels: [tenant, priority, exported_job]
+    datasets:
+      - name: queue_jobs_preasure
         legend:
           format: "{{tenant}} - {{priority}} - {{exported_job}}"

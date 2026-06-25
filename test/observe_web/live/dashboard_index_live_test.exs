@@ -9,13 +9,13 @@ defmodule ObserveWeb.DashboardIndexLiveTest do
     assert has_element?(view, "#dashboard-node-laravel")
 
     view
-    |> element("#dashboard-folder-applications button")
+    |> element("#dashboard-folder-Apps button")
     |> render_click()
 
     refute has_element?(view, "#dashboard-node-laravel")
 
     view
-    |> element("#dashboard-folder-applications button")
+    |> element("#dashboard-folder-Apps button")
     |> render_click()
 
     assert has_element?(view, "#dashboard-node-laravel")
