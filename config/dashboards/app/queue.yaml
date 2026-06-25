@@ -198,7 +198,7 @@ panels:
     collapsed: true
 
   - id: execution-time
-    title: Exeution Time
+    title: Execution Time
     description: Average execution time for the top default-priority jobs by tenant and job.
     type: timeseries
     legend:

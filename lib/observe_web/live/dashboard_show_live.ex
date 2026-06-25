@@ -54,8 +54,10 @@ defmodule ObserveWeb.DashboardShowLive do
         %{"_target" => ["variables", "source"], "variables" => params},
         socket
       ) do
-    {variable_values, variable_options} = fast_source_variable_update(socket, params)
-    send(self(), {:settle_variables, params})
+    {variable_values, variable_options, source_value} =
+      fast_source_variable_update(socket, params)
+
+    load_deployment_options_async(socket, params, source_value)
 
     {:noreply,
      socket
@@ -155,6 +157,37 @@ defmodule ObserveWeb.DashboardShowLive do
       |> start_dashboard_run(variable_values)
 
     {:noreply, socket}
+  end
+
+  def handle_info({:deployment_options_loaded, source_value, params, deployment_options}, socket) do
+    if socket.assigns.variable_values["source"] == source_value do
+      variables = Map.get(socket.assigns.dashboard, "variables", %{})
+      deployment_spec = Map.get(variables, "deployment", %{})
+
+      deployment_value =
+        selected_variable_value(
+          Map.get(params, "deployment"),
+          deployment_spec,
+          deployment_options
+        )
+
+      params = Map.put(params, "deployment", deployment_value)
+
+      send(self(), {:settle_variables, params})
+
+      {:noreply,
+       socket
+       |> assign(
+         :variable_values,
+         Map.put(socket.assigns.variable_values, "deployment", deployment_value)
+       )
+       |> assign(
+         :variable_options,
+         Map.put(socket.assigns.variable_options, "deployment", deployment_options)
+       )}
+    else
+      {:noreply, socket}
+    end
   end
 
   def handle_info(:poll_dashboard, socket) do
@@ -343,7 +376,6 @@ defmodule ObserveWeb.DashboardShowLive do
   defp fast_source_variable_update(socket, params) do
     variables = Map.get(socket.assigns.dashboard, "variables", %{})
     source_spec = Map.get(variables, "source", %{})
-    deployment_spec = Map.get(variables, "deployment", %{})
 
     source_options =
       Variables.select_options(
@@ -354,26 +386,31 @@ defmodule ObserveWeb.DashboardShowLive do
 
     source_value = selected_variable_value(Map.get(params, "source"), source_spec, source_options)
 
-    deployment_vars = Map.put(socket.assigns.variable_values, "source", source_value)
-
-    deployment_options =
-      Variables.select_options(deployment_spec, socket.assigns.datasources, deployment_vars)
-
-    deployment_value =
-      selected_variable_value(Map.get(params, "deployment"), deployment_spec, deployment_options)
-
     variable_values =
       socket.assigns.variable_values
       |> Map.merge(params)
       |> Map.put("source", source_value)
-      |> Map.put("deployment", deployment_value)
+      |> Map.put("deployment", "")
 
     variable_options =
       socket.assigns.variable_options
       |> Map.put("source", source_options)
-      |> Map.put("deployment", deployment_options)
+      |> Map.put("deployment", [{"Loading deployments...", ""}])
 
-    {variable_values, variable_options}
+    {variable_values, variable_options, source_value}
+  end
+
+  defp load_deployment_options_async(socket, params, source_value) do
+    caller = self()
+    variables = Map.get(socket.assigns.dashboard, "variables", %{})
+    deployment_spec = Map.get(variables, "deployment", %{})
+    datasources = socket.assigns.datasources
+    vars = Map.put(socket.assigns.variable_values, "source", source_value)
+
+    Task.start(fn ->
+      deployment_options = Variables.select_options(deployment_spec, datasources, vars)
+      send(caller, {:deployment_options_loaded, source_value, params, deployment_options})
+    end)
   end
 
   defp selected_variable_value(requested_value, spec, options) do
