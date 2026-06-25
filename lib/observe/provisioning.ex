@@ -94,7 +94,7 @@ defmodule Observe.Provisioning do
     end)
   end
 
-  defp normalize_dashboard(%{"kind" => "Dashboard"} = dashboard, _path) do
+  defp normalize_dashboard(%{"kind" => "Dashboard"} = dashboard, path) do
     name = get_in(dashboard, ["metadata", "name"])
 
     cond do
@@ -116,6 +116,7 @@ defmodule Observe.Provisioning do
       true ->
         {:ok,
          dashboard
+         |> put_variable_order(path)
          |> Map.put_new("variables", %{})
          |> Map.put_new("datasources", %{})
          |> Map.put_new("queryRefs", [])
@@ -176,6 +177,71 @@ defmodule Observe.Provisioning do
       "path" => path,
       "folder" => folder(config, root, path, folder_override)
     })
+  end
+
+  defp put_variable_order(%{"variables" => variables} = dashboard, path) when is_map(variables) do
+    order = variable_order(path)
+
+    variables =
+      Map.new(variables, fn {name, spec} ->
+        spec =
+          if is_map(spec),
+            do: Map.put(spec, "_order", Enum.find_index(order, &(&1 == name))),
+            else: spec
+
+        {name, spec}
+      end)
+
+    Map.put(dashboard, "variables", variables)
+  end
+
+  defp put_variable_order(dashboard, _path), do: dashboard
+
+  defp variable_order(path) do
+    case File.read(path) do
+      {:ok, content} -> extract_section_keys(content, "variables")
+      {:error, _reason} -> []
+    end
+  end
+
+  defp extract_section_keys(content, section) do
+    lines = String.split(content, "\n")
+
+    case Enum.find_index(lines, &(String.trim(&1) == "#{section}:")) do
+      nil ->
+        []
+
+      index ->
+        section_indent = line_indent(Enum.at(lines, index))
+
+        lines
+        |> Enum.drop(index + 1)
+        |> Enum.reduce_while([], fn line, acc ->
+          trimmed = String.trim(line)
+          indent = line_indent(line)
+
+          cond do
+            trimmed == "" or String.starts_with?(trimmed, "#") ->
+              {:cont, acc}
+
+            indent <= section_indent ->
+              {:halt, acc}
+
+            indent == section_indent + 2 and String.ends_with?(trimmed, ":") ->
+              {:cont, [String.trim_trailing(trimmed, ":") | acc]}
+
+            true ->
+              {:cont, acc}
+          end
+        end)
+        |> Enum.reverse()
+    end
+  end
+
+  defp line_indent(line) do
+    line
+    |> String.length()
+    |> Kernel.-(String.length(String.trim_leading(line)))
   end
 
   defp folder(config, root, path, folder_override) do

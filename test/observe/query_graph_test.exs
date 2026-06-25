@@ -25,6 +25,42 @@ defmodule Observe.QueryGraphTest do
     assert get_in(dashboards, ["queue", "datasets", "queue_low_pending", "label"]) == "Low"
   end
 
+  test "loads panel legend format for visualization-specific series names" do
+    {:ok, datasources} = Provisioning.load_datasources()
+    {:ok, queries} = Provisioning.load_queries()
+    {:ok, dashboards} = Provisioning.load_dashboards(datasources, queries)
+
+    panel =
+      dashboards
+      |> get_in(["queue", "panels"])
+      |> Enum.find(&(Map.get(&1, "id") == "jobs-execution-time-default"))
+
+    assert get_in(panel, ["legend", "format"]) == "{{tenant}} [{{domain}}] {{exported_job}}"
+  end
+
+  test "queue tenant variable is scoped by selected deployment" do
+    {:ok, datasources} = Provisioning.load_datasources()
+    {:ok, queries} = Provisioning.load_queries()
+    {:ok, dashboards} = Provisioning.load_dashboards(datasources, queries)
+
+    assert get_in(dashboards, ["queue", "variables", "tenant", "metric"]) ==
+             ~s(app_queue_job_count{deployment="${vars.deployment}"})
+
+    assert get_in(dashboards, ["queue", "variables", "tenant", "metric_label"]) == "tenant"
+    assert get_in(dashboards, ["queue", "variables", "tenant", "include_all"]) == true
+  end
+
+  test "dashboard variables preserve yaml definition order" do
+    {:ok, datasources} = Provisioning.load_datasources()
+    {:ok, queries} = Provisioning.load_queries()
+    {:ok, dashboards} = Provisioning.load_dashboards(datasources, queries)
+
+    assert dashboards
+           |> get_in(["queue", "variables"])
+           |> Observe.Variables.ordered()
+           |> Enum.map(fn {name, _spec} -> name end) == ["source", "deployment", "tenant"]
+  end
+
   test "skips invalid dashboards instead of failing the full dashboard load" do
     {:ok, datasources} = Provisioning.load_datasources()
     {:ok, queries} = Provisioning.load_queries()

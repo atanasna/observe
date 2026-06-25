@@ -5,24 +5,6 @@ metadata:
   folder: applications/queues
 
 queries:
-  queue_low_pending:
-    datasource: prometheus
-    inputs:
-      deployment:
-        required: true
-    request:
-      range: true
-      interval: 1m
-      query: max(app_queue_low_pending_size{deployment="${inputs.deployment}"}) by (deployment)
-  queue_default_pending:
-    datasource: prometheus
-    inputs:
-      deployment:
-        required: true
-    request:
-      range: true
-      interval: 1m
-      query: max(app_queue_default_pending_size{deployment="${inputs.deployment}"}) by (deployment)
   queue:
     datasource: prometheus
     inputs:
@@ -37,3 +19,27 @@ queries:
       interval: 1m
       query: max(app_queue_${inputs.priority}_${inputs.state}_size{deployment="${inputs.deployment}"}) by (deployment)
 
+  queue_job_execution_time:
+    datasource: prometheus
+    inputs:
+      deployment:
+        required: true
+      tenant:
+        required: true
+      priority:
+        required: true
+    request:
+      range: true
+      interval: 1m
+      query: |
+        (
+          (
+            rate(app_queue_job_execution_time{deployment=~"${inputs.deployment}",tenant=~"${inputs.tenant}", priority=~"${inputs.priority}",exported_job=~"${inputs.job}"}[2m])
+            / ignoring(type)
+            rate(app_queue_job_count{deployment=~"${inputs.deployment}",tenant=~"${inputs.tenant}",priority=~"${inputs.priority}",exported_job=~"${inputs.job}",type="processed"}[2m])
+          )
+          and ignoring(type)
+          rate(app_queue_job_count{deployment=~"${inputs.deployment}",tenant=~"${inputs.tenant}",priority=~"${inputs.priority}",exported_job=~"${inputs.job}", type="processed"}[2m]) > 0
+        )
+        or ignoring(type)
+        0 * rate(app_queue_job_count{deployment=~"${inputs.deployment}",tenant=~"${inputs.tenant}",priority=~"${inputs.priority}",exported_job=~"${inputs.job}",type="processed"}[2m])

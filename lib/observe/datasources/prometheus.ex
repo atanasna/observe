@@ -3,6 +3,8 @@ defmodule Observe.Datasources.Prometheus do
   Minimal Prometheus HTTP API adapter.
   """
 
+  @default_timeout_ms 60_000
+
   def execute(datasource, request) do
     with {:ok, url} <- required(datasource, "url"),
          {:ok, query} <- required(request, "query"),
@@ -27,7 +29,8 @@ defmodule Observe.Datasources.Prometheus do
     params = label_values_params(spec)
 
     options =
-      [params: params, receive_timeout: Map.get(datasource, "timeout_ms", 15_000)]
+      datasource
+      |> request_options(params)
       |> maybe_put_auth(datasource)
 
     case Req.get(prometheus_url(url, "label/#{URI.encode(label)}/values"), options) do
@@ -47,7 +50,8 @@ defmodule Observe.Datasources.Prometheus do
     params = request_params(request, query)
 
     options =
-      [params: params, receive_timeout: Map.get(datasource, "timeout_ms", 15_000)]
+      datasource
+      |> request_options(params)
       |> maybe_put_auth(datasource)
 
     case Req.get(prometheus_url(url, endpoint), options) do
@@ -86,6 +90,14 @@ defmodule Observe.Datasources.Prometheus do
 
   defp maybe_put(params, _key, nil), do: params
   defp maybe_put(params, key, value), do: Keyword.put(params, key, value)
+
+  defp request_options(datasource, params) do
+    [
+      params: params,
+      receive_timeout: Map.get(datasource, "timeout_ms", @default_timeout_ms),
+      retry: false
+    ]
+  end
 
   defp maybe_put_auth(options, %{
          "basic_auth" => %{"username" => username, "password" => password}

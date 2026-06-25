@@ -19,10 +19,11 @@ defmodule ObserveWeb.DashboardShowLive do
       dashboard ->
         datasources = Store.datasources()
 
-        variable_values =
-          Variables.merge(Map.get(dashboard, "variables", %{}), params, datasources)
+        {variable_values, variable_options} =
+          Variables.merge_with_options(Map.get(dashboard, "variables", %{}), params, datasources)
 
-        time_range = TimeRange.range(TimeRange.default())
+        time_range_preset = TimeRange.default()
+        time_range = TimeRange.range(time_range_preset)
         datetime_values = TimeRange.datetime_local(time_range)
 
         {:ok,
@@ -30,12 +31,16 @@ defmodule ObserveWeb.DashboardShowLive do
          |> assign(:dashboard, dashboard)
          |> assign(:datasources, datasources)
          |> assign(:variable_values, variable_values)
+         |> assign(:variable_options, variable_options)
          |> assign(:start_time, datetime_values.start)
          |> assign(:end_time, datetime_values.end)
+         |> assign(:time_range_preset, time_range_preset)
          |> assign(:refresh_interval, "off")
          |> assign(:refresh_timer, nil)
          |> assign(:run_ref, nil)
+         |> assign(:run_id, nil)
          |> assign(:loading?, false)
+         |> assign(:collapsed_sections, collapsed_sections(dashboard))
          |> assign(:plan, nil)
          |> assign(:datasets, %{})
          |> assign(:error, nil)
@@ -44,29 +49,87 @@ defmodule ObserveWeb.DashboardShowLive do
   end
 
   @impl true
+  def handle_event(
+        "variables_changed",
+        %{"_target" => ["variables", "source"], "variables" => params},
+        socket
+      ) do
+    {variable_values, variable_options} = fast_source_variable_update(socket, params)
+    send(self(), {:settle_variables, params})
+
+    {:noreply,
+     socket
+     |> assign(:variable_values, variable_values)
+     |> assign(:variable_options, variable_options)}
+  end
+
   def handle_event("variables_changed", %{"variables" => params}, socket) do
-    variable_values =
-      Variables.merge(
+    {variable_values, variable_options} =
+      Variables.merge_with_options(
         Map.get(socket.assigns.dashboard, "variables", %{}),
         params,
         socket.assigns.datasources
       )
 
-    {:noreply, start_dashboard_run(socket, variable_values)}
+    socket =
+      socket
+      |> assign(:variable_options, variable_options)
+      |> start_dashboard_run(variable_values)
+
+    {:noreply, socket}
   end
 
   def handle_event("refresh", _params, socket) do
-    {:noreply, start_dashboard_run(socket, socket.assigns.variable_values)}
+    {:noreply,
+     socket
+     |> sync_relative_time_fields()
+     |> start_dashboard_run(socket.assigns.variable_values)}
+  end
+
+  def handle_event("select_time_range", %{"range" => range}, socket) do
+    if relative_time_range?(range) do
+      datetime_values = range |> TimeRange.range() |> TimeRange.datetime_local()
+
+      socket =
+        socket
+        |> assign(:start_time, datetime_values.start)
+        |> assign(:end_time, datetime_values.end)
+        |> assign(:time_range_preset, range)
+        |> start_dashboard_run(socket.assigns.variable_values)
+
+      {:noreply, socket}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("toggle_panel_section", %{"id" => id}, socket) do
+    collapsed_sections =
+      if MapSet.member?(socket.assigns.collapsed_sections, id) do
+        MapSet.delete(socket.assigns.collapsed_sections, id)
+      else
+        MapSet.put(socket.assigns.collapsed_sections, id)
+      end
+
+    {:noreply, assign(socket, :collapsed_sections, collapsed_sections)}
   end
 
   def handle_event("controls_changed", %{"controls" => controls}, socket) do
     start_time = valid_datetime(controls, "start_time", socket.assigns.start_time)
     end_time = valid_datetime(controls, "end_time", socket.assigns.end_time)
 
+    time_range_preset =
+      if start_time == socket.assigns.start_time and end_time == socket.assigns.end_time do
+        socket.assigns.time_range_preset
+      else
+        "custom"
+      end
+
     socket =
       socket
       |> assign(:start_time, start_time)
       |> assign(:end_time, end_time)
+      |> assign(:time_range_preset, time_range_preset)
       |> assign(
         :refresh_interval,
         Map.get(controls, "refresh_interval", socket.assigns.refresh_interval)
@@ -78,24 +141,60 @@ defmodule ObserveWeb.DashboardShowLive do
   end
 
   @impl true
+  def handle_info({:settle_variables, params}, socket) do
+    {variable_values, variable_options} =
+      Variables.merge_with_options(
+        Map.get(socket.assigns.dashboard, "variables", %{}),
+        params,
+        socket.assigns.datasources
+      )
+
+    socket =
+      socket
+      |> assign(:variable_options, variable_options)
+      |> start_dashboard_run(variable_values)
+
+    {:noreply, socket}
+  end
+
   def handle_info(:poll_dashboard, socket) do
     socket =
       socket
+      |> sync_relative_time_fields()
       |> start_dashboard_run(socket.assigns.variable_values)
       |> schedule_refresh_timer()
 
     {:noreply, socket}
   end
 
+  def handle_info({:dashboard_plan, run_id, plan}, %{assigns: %{run_id: run_id}} = socket) do
+    {:noreply, assign(socket, :plan, plan)}
+  end
+
+  def handle_info(
+        {:dashboard_dataset, run_id, name, rows},
+        %{assigns: %{run_id: run_id}} = socket
+      ) do
+    {:noreply, update(socket, :datasets, &Map.put(&1, name, rows))}
+  end
+
+  def handle_info({:dashboard_complete, run_id}, %{assigns: %{run_id: run_id}} = socket) do
+    {:noreply, assign(socket, :loading?, false)}
+  end
+
+  def handle_info({:dashboard_plan, _run_id, _plan}, socket), do: {:noreply, socket}
+
+  def handle_info({:dashboard_dataset, _run_id, _name, _rows}, socket), do: {:noreply, socket}
+
+  def handle_info({:dashboard_complete, _run_id}, socket), do: {:noreply, socket}
+
   def handle_info({ref, result}, %{assigns: %{run_ref: ref}} = socket) do
     Process.demonitor(ref, [:flush])
 
     socket =
       case result do
-        {:ok, result} ->
+        :ok ->
           socket
-          |> assign(:plan, result.plan)
-          |> assign(:datasets, result.datasets)
           |> assign(:error, nil)
 
         {:error, reason} ->
@@ -105,7 +204,8 @@ defmodule ObserveWeb.DashboardShowLive do
           |> assign(:error, reason)
       end
 
-    {:noreply, socket |> assign(:loading?, false) |> assign(:run_ref, nil)}
+    {:noreply,
+     socket |> assign(:loading?, false) |> assign(:run_ref, nil) |> assign(:run_id, nil)}
   end
 
   def handle_info({ref, _result}, socket) when is_reference(ref), do: {:noreply, socket}
@@ -115,23 +215,36 @@ defmodule ObserveWeb.DashboardShowLive do
      socket
      |> assign(:loading?, false)
      |> assign(:run_ref, nil)
+     |> assign(:run_id, nil)
      |> assign(:error, "dashboard run failed: #{inspect(reason)}")}
   end
 
   def handle_info({:DOWN, _ref, :process, _pid, _reason}, socket), do: {:noreply, socket}
 
   defp start_dashboard_run(socket, variable_values) do
+    caller = self()
+    run_id = make_ref()
+
     opts = %{
-      time_range: TimeRange.custom!(socket.assigns.start_time, socket.assigns.end_time)
+      time_range: selected_time_range(socket)
     }
 
     task =
-      start_query_task(fn -> Executor.run(socket.assigns.dashboard, variable_values, opts) end)
+      start_query_task(fn ->
+        Executor.run_stream(socket.assigns.dashboard, variable_values, opts, fn
+          {:plan, plan} -> send(caller, {:dashboard_plan, run_id, plan})
+          {:dataset, name, rows} -> send(caller, {:dashboard_dataset, run_id, name, rows})
+          :complete -> send(caller, {:dashboard_complete, run_id})
+        end)
+      end)
 
     socket
     |> assign(:variable_values, variable_values)
     |> assign(:loading?, true)
     |> assign(:run_ref, task.ref)
+    |> assign(:run_id, run_id)
+    |> assign(:plan, nil)
+    |> assign(:datasets, %{})
     |> assign(:error, nil)
   end
 
@@ -183,6 +296,98 @@ defmodule ObserveWeb.DashboardShowLive do
     [{"Off", "off"}, {"10s", "10s"}, {"30s", "30s"}, {"1m", "1m"}, {"5m", "5m"}]
   end
 
+  defp selected_time_range(%{assigns: %{time_range_preset: preset}} = socket)
+       when preset != "custom" do
+    TimeRange.range(preset)
+  rescue
+    _ -> TimeRange.custom!(socket.assigns.start_time, socket.assigns.end_time)
+  end
+
+  defp selected_time_range(socket) do
+    TimeRange.custom!(socket.assigns.start_time, socket.assigns.end_time)
+  end
+
+  defp sync_relative_time_fields(%{assigns: %{time_range_preset: "custom"}} = socket), do: socket
+
+  defp sync_relative_time_fields(%{assigns: %{time_range_preset: preset}} = socket) do
+    datetime_values = preset |> TimeRange.range() |> TimeRange.datetime_local()
+
+    socket
+    |> assign(:start_time, datetime_values.start)
+    |> assign(:end_time, datetime_values.end)
+  end
+
+  defp relative_time_range?(range) do
+    Enum.any?(TimeRange.options(), fn {_label, value} -> value == range end)
+  end
+
+  defp time_range_button_label("custom", start_time, end_time) do
+    "#{format_time_range_value(start_time)} to #{format_time_range_value(end_time)}"
+  end
+
+  defp time_range_button_label(preset, start_time, end_time) do
+    case Enum.find_value(TimeRange.options(), fn {label, value} ->
+           if value == preset, do: label
+         end) do
+      nil -> time_range_button_label("custom", start_time, end_time)
+      label -> label
+    end
+  end
+
+  defp format_time_range_value(value) do
+    value
+    |> String.replace("T", " ")
+    |> String.replace(~r/:00$/, "")
+  end
+
+  defp fast_source_variable_update(socket, params) do
+    variables = Map.get(socket.assigns.dashboard, "variables", %{})
+    source_spec = Map.get(variables, "source", %{})
+    deployment_spec = Map.get(variables, "deployment", %{})
+
+    source_options =
+      Variables.select_options(
+        source_spec,
+        socket.assigns.datasources,
+        socket.assigns.variable_values
+      )
+
+    source_value = selected_variable_value(Map.get(params, "source"), source_spec, source_options)
+
+    deployment_vars = Map.put(socket.assigns.variable_values, "source", source_value)
+
+    deployment_options =
+      Variables.select_options(deployment_spec, socket.assigns.datasources, deployment_vars)
+
+    deployment_value =
+      selected_variable_value(Map.get(params, "deployment"), deployment_spec, deployment_options)
+
+    variable_values =
+      socket.assigns.variable_values
+      |> Map.merge(params)
+      |> Map.put("source", source_value)
+      |> Map.put("deployment", deployment_value)
+
+    variable_options =
+      socket.assigns.variable_options
+      |> Map.put("source", source_options)
+      |> Map.put("deployment", deployment_options)
+
+    {variable_values, variable_options}
+  end
+
+  defp selected_variable_value(requested_value, spec, options) do
+    default = Map.get(spec, "default")
+    values = Enum.map(options, fn {_label, value} -> value end)
+
+    cond do
+      values == [] -> requested_value || default
+      requested_value in values -> requested_value
+      default in values -> default
+      true -> List.first(values)
+    end
+  end
+
   defp valid_datetime(controls, key, current_value) do
     value = Map.get(controls, key, current_value)
 
@@ -194,7 +399,7 @@ defmodule ObserveWeb.DashboardShowLive do
     ~H"""
     <Layouts.app flash={@flash}>
       <section id="dashboard-show" class="space-y-3">
-        <div class="mocha-shell sharp-corner p-3 md:p-4">
+        <div class="dashboard-header-shell mocha-shell sharp-corner p-3 md:p-4">
           <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <.link
@@ -236,30 +441,82 @@ defmodule ObserveWeb.DashboardShowLive do
                 phx-change="controls_changed"
                 class="flex flex-wrap gap-2"
               >
-                <div>
-                  <label class="mb-1 block text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-[#89dceb]">
-                    Start
-                  </label>
-                  <input
-                    id="dashboard-start-time"
-                    type="datetime-local"
-                    name="controls[start_time]"
-                    value={@start_time}
-                    class="border border-[#b4befe]/15 bg-[#11111b]/55 px-2 py-1.5 text-xs font-semibold text-[#cdd6f4] outline-none transition focus:border-[#cba6f7]/70 focus:bg-[#181825]"
-                  />
-                </div>
-                <div>
-                  <label class="mb-1 block text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-[#89dceb]">
-                    End
-                  </label>
-                  <input
-                    id="dashboard-end-time"
-                    type="datetime-local"
-                    name="controls[end_time]"
-                    value={@end_time}
-                    class="border border-[#b4befe]/15 bg-[#11111b]/55 px-2 py-1.5 text-xs font-semibold text-[#cdd6f4] outline-none transition focus:border-[#cba6f7]/70 focus:bg-[#181825]"
-                  />
-                </div>
+                <details id="dashboard-time-picker" class="dashboard-time-picker relative">
+                  <summary class="flex min-h-8 cursor-pointer list-none items-center gap-2 border border-[#b4befe]/20 bg-[#11111b]/70 px-3 py-1.5 text-xs font-semibold text-[#cdd6f4] shadow-lg shadow-black/10 transition hover:border-[#89dceb]/50 hover:bg-[#181825] [&::-webkit-details-marker]:hidden">
+                    <.icon name="hero-clock-micro" class="size-4 text-[#89dceb]" />
+                    <span>{time_range_button_label(@time_range_preset, @start_time, @end_time)}</span>
+                    <.icon name="hero-chevron-down-micro" class="size-4 text-[#bac2de]" />
+                  </summary>
+                  <div class="absolute right-0 top-[calc(100%+0.5rem)] z-50 w-[min(92vw,40rem)] border border-[#89b4fa]/25 bg-[#11111b] text-[#cdd6f4] shadow-2xl shadow-black/50">
+                    <div class="grid gap-0 md:grid-cols-[13rem_1fr]">
+                      <div class="border-b border-[#b4befe]/15 bg-[#181825]/80 p-2 md:border-b-0 md:border-r">
+                        <p class="px-2 py-1 text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-[#89dceb]">
+                          Quick ranges
+                        </p>
+                        <button
+                          :for={{label, value} <- TimeRange.options()}
+                          type="button"
+                          phx-click="select_time_range"
+                          phx-value-range={value}
+                          class={[
+                            "block w-full px-2 py-1.5 text-left text-xs font-semibold transition hover:bg-[#313244] hover:text-[#f5c2e7]",
+                            @time_range_preset == value && "bg-[#313244] text-[#f5c2e7]"
+                          ]}
+                        >
+                          {label}
+                        </button>
+                      </div>
+                      <div class="space-y-3 p-3">
+                        <div>
+                          <p class="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-[#89dceb]">
+                            Absolute time range
+                          </p>
+                          <p class="mt-1 text-[0.7rem] text-[#bac2de]">
+                            Set exact UTC start and end times.
+                          </p>
+                        </div>
+                        <div class="grid gap-2 sm:grid-cols-2">
+                          <div>
+                            <label class="mb-1 block text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-[#89dceb]">
+                              From
+                            </label>
+                            <input
+                              id="dashboard-start-time"
+                              type="datetime-local"
+                              name="controls[start_time]"
+                              value={@start_time}
+                              class="w-full border border-[#b4befe]/15 bg-[#181825]/80 px-2 py-1.5 text-xs font-semibold text-[#cdd6f4] outline-none transition focus:border-[#cba6f7]/70 focus:bg-[#1e1e2e]"
+                            />
+                          </div>
+                          <div>
+                            <label class="mb-1 block text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-[#89dceb]">
+                              To
+                            </label>
+                            <input
+                              id="dashboard-end-time"
+                              type="datetime-local"
+                              name="controls[end_time]"
+                              value={@end_time}
+                              class="w-full border border-[#b4befe]/15 bg-[#181825]/80 px-2 py-1.5 text-xs font-semibold text-[#cdd6f4] outline-none transition focus:border-[#cba6f7]/70 focus:bg-[#1e1e2e]"
+                            />
+                          </div>
+                        </div>
+                        <div class="flex items-center justify-between border-t border-[#b4befe]/15 pt-3">
+                          <span class="text-[0.7rem] font-semibold text-[#bac2de]">
+                            Times are evaluated in UTC.
+                          </span>
+                          <button
+                            type="button"
+                            phx-click="refresh"
+                            class="border border-[#89dceb]/40 bg-[#89dceb] px-3 py-1.5 text-xs font-bold text-[#11111b] transition hover:bg-[#f5c2e7]"
+                          >
+                            Apply time range
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </details>
                 <div>
                   <label class="mb-1 block text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-[#89dceb]">
                     Refresh
@@ -300,7 +557,7 @@ defmodule ObserveWeb.DashboardShowLive do
             phx-change="variables_changed"
             class="mt-3 grid gap-2 md:grid-cols-4 xl:grid-cols-6"
           >
-            <div :for={{name, spec} <- Map.get(@dashboard, "variables", %{})}>
+            <div :for={{name, spec} <- Variables.ordered(Map.get(@dashboard, "variables", %{}))}>
               <label
                 for={"variables_#{name}"}
                 class="mb-1 block text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-[#89dceb]"
@@ -313,9 +570,7 @@ defmodule ObserveWeb.DashboardShowLive do
                 class="w-full border border-[#b4befe]/15 bg-[#11111b]/55 px-2 py-1.5 text-xs font-semibold text-[#cdd6f4] outline-none transition focus:border-[#cba6f7]/70 focus:bg-[#181825]"
               >
                 <option
-                  :for={
-                    {label, value} <- Variables.select_options(spec, @datasources, @variable_values)
-                  }
+                  :for={{label, value} <- Map.get(@variable_options, name, [])}
                   value={value}
                   selected={@variable_values[name] == value}
                 >
@@ -424,8 +679,9 @@ defmodule ObserveWeb.DashboardShowLive do
           style={"--panel-columns: #{dashboard_columns(@dashboard)}"}
         >
           <article
-            :for={panel <- Map.get(@dashboard, "panels", [])}
+            :for={panel <- visible_panels(@dashboard, @collapsed_sections)}
             id={"panel-#{panel["id"]}"}
+            data-section-collapsed={section_collapsed_attr(panel, @collapsed_sections)}
             data-stacked={stacked_attr(panel)}
             data-legend-position={legend_position(panel)}
             data-layout-width={panel_width(panel, @dashboard)}
@@ -465,9 +721,19 @@ defmodule ObserveWeb.DashboardShowLive do
               <% else %>
                 <%= case panel["type"] do %>
                   <% "row" -> %>
-                    <div class="border-l-2 border-[#cba6f7] bg-[#11111b]/40 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.22em] text-[#f5c2e7]">
-                      {panel["title"]}
-                    </div>
+                    <button
+                      id={"section-toggle-#{panel["id"]}"}
+                      type="button"
+                      phx-click="toggle_panel_section"
+                      phx-value-id={panel["id"]}
+                      aria-expanded={!section_collapsed?(panel, @collapsed_sections) |> to_string()}
+                      class="flex w-full items-center justify-between border-l-2 border-[#cba6f7] bg-[#11111b]/40 px-3 py-1.5 text-left text-xs font-semibold uppercase tracking-[0.22em] text-[#f5c2e7] transition hover:border-[#f5c2e7] hover:bg-[#313244]/55"
+                    >
+                      <span>{panel["title"]}</span>
+                      <span class="text-[#cba6f7]">
+                        {if section_collapsed?(panel, @collapsed_sections), do: "Show", else: "Hide"}
+                      </span>
+                    </button>
                   <% "stat" -> %>
                     <div class="sharp-corner bg-gradient-to-br from-[#cba6f7] via-[#89b4fa] to-[#94e2d5] p-4 text-[#11111b]">
                       <p class="text-xs font-semibold uppercase tracking-[0.18em] opacity-70">Rows</p>
@@ -527,7 +793,9 @@ defmodule ObserveWeb.DashboardShowLive do
   attr :rows, :list, required: true
 
   def timeseries_chart(assigns) do
-    assigns = assign(assigns, :chart_json, Jason.encode!(chart_payload(assigns.rows)))
+    assigns =
+      assign(assigns, :chart_json, Jason.encode!(chart_payload(assigns.rows, assigns.panel)))
+
     assigns = assign(assigns, :stacked, stacked_attr(assigns.panel))
     assigns = assign(assigns, :legend_position, legend_position(assigns.panel))
     assigns = assign(assigns, :height, panel_height(assigns.panel, 160))
@@ -596,6 +864,45 @@ defmodule ObserveWeb.DashboardShowLive do
   end
 
   defp panel_rows(_panel, _datasets, _dashboard), do: []
+
+  defp collapsed_sections(dashboard) do
+    dashboard
+    |> Map.get("panels", [])
+    |> Enum.filter(&(Map.get(&1, "type") == "row" and Map.get(&1, "collapsed") == true))
+    |> Enum.map(&Map.get(&1, "id"))
+    |> Enum.reject(&is_nil/1)
+    |> MapSet.new()
+  end
+
+  defp visible_panels(dashboard, collapsed_sections) do
+    {panels, _collapsed?} =
+      dashboard
+      |> Map.get("panels", [])
+      |> Enum.reduce({[], false}, fn panel, {visible, current_section_collapsed?} ->
+        if Map.get(panel, "type") == "row" do
+          collapsed? = section_collapsed?(panel, collapsed_sections)
+          {[panel | visible], collapsed?}
+        else
+          if current_section_collapsed? do
+            {visible, current_section_collapsed?}
+          else
+            {[panel | visible], current_section_collapsed?}
+          end
+        end
+      end)
+
+    Enum.reverse(panels)
+  end
+
+  defp section_collapsed?(%{"type" => "row", "id" => id}, collapsed_sections),
+    do: MapSet.member?(collapsed_sections, id)
+
+  defp section_collapsed?(_panel, _collapsed_sections), do: false
+
+  defp section_collapsed_attr(%{"type" => "row"} = panel, collapsed_sections),
+    do: section_collapsed?(panel, collapsed_sections) |> to_string()
+
+  defp section_collapsed_attr(_panel, _collapsed_sections), do: nil
 
   defp stacked_attr(%{"stacked" => true}), do: "true"
   defp stacked_attr(_panel), do: "false"
@@ -718,13 +1025,13 @@ defmodule ObserveWeb.DashboardShowLive do
 
   defp state_class(_value), do: "mocha-chip px-2 py-1 text-xs font-semibold"
 
-  defp chart_payload(rows) do
+  defp chart_payload(rows, panel) do
     points =
       Enum.filter(rows, &(is_number(Map.get(&1, "time")) and is_number(Map.get(&1, "value"))))
 
     series =
       points
-      |> Enum.group_by(&series_label/1)
+      |> Enum.group_by(&series_label(&1, panel))
       |> Enum.sort_by(fn {label, _rows} -> label end)
       |> Enum.map(fn {label, series_rows} ->
         %{
@@ -737,6 +1044,24 @@ defmodule ObserveWeb.DashboardShowLive do
       end)
 
     %{series: series}
+  end
+
+  defp series_label(row, panel) do
+    case legend_format(panel) do
+      format when is_binary(format) and format != "" -> render_legend_format(format, row)
+      _format -> series_label(row)
+    end
+  end
+
+  defp legend_format(%{"legend" => %{"format" => format}}), do: format
+  defp legend_format(_panel), do: nil
+
+  defp render_legend_format(format, row) do
+    Regex.replace(~r/\{\{\s*([^}\s]+)\s*\}\}/, format, fn _match, key ->
+      row
+      |> Map.get(key, "")
+      |> to_string()
+    end)
   end
 
   defp bar_height(row) do

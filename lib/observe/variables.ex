@@ -28,28 +28,34 @@ defmodule Observe.Variables do
   end
 
   def merge(variables, params, datasources \\ %{}) do
-    defaults = defaults(variables, datasources)
+    {values, _options} = merge_with_options(variables, params, datasources)
+    values
+  end
 
-    requested = Map.merge(defaults, params)
+  def merge_with_options(variables, params, datasources \\ %{}) do
+    requested = params || %{}
 
-    variables
-    |> ordered_variables()
-    |> Enum.reduce(defaults, fn {name, _spec}, acc ->
-      default = Map.get(defaults, name)
-      value = Map.get(requested, name, default)
-      spec = Map.get(variables, name, %{})
-      values = options(spec, datasources, Map.merge(requested, acc))
+    {values, options} =
+      variables
+      |> ordered_variables()
+      |> Enum.reduce({%{}, %{}}, fn {name, spec}, {values_acc, options_acc} ->
+        default = Map.get(spec, "default")
+        value = Map.get(requested, name, default)
+        current_options = select_options(spec, datasources, Map.merge(requested, values_acc))
+        option_values = Enum.map(current_options, fn {_label, value} -> value end)
 
-      selected_value =
-        cond do
-          values == [] -> value
-          value in values -> value
-          default in values -> default
-          true -> List.first(values)
-        end
+        selected_value =
+          cond do
+            option_values == [] -> value
+            value in option_values -> value
+            default in option_values -> default
+            true -> List.first(option_values)
+          end
 
-      Map.put(acc, name, selected_value)
-    end)
+        {Map.put(values_acc, name, selected_value), Map.put(options_acc, name, current_options)}
+      end)
+
+    {values, options}
   end
 
   def context(variables, values, datasources \\ %{}) do
@@ -58,6 +64,8 @@ defmodule Observe.Variables do
       {name, variable_context(value, spec, datasources)}
     end)
   end
+
+  def ordered(variables), do: ordered_variables(variables)
 
   def options(spec, datasources) do
     options(spec, datasources, %{})
@@ -88,6 +96,7 @@ defmodule Observe.Variables do
     |> Enum.map(fn {name, _config} -> {option_label(name, matcher, spec), name} end)
     |> Enum.reject(fn {label, _value} -> is_nil(label) end)
     |> Enum.sort_by(fn {label, _value} -> label end)
+    |> maybe_include_all(spec)
   end
 
   def select_options(%{"type" => "label_values"} = spec, datasources, vars) do
@@ -97,6 +106,7 @@ defmodule Observe.Variables do
     |> label_values(datasources, vars)
     |> Enum.map(fn value -> {option_label(to_string(value), matcher, spec), value} end)
     |> Enum.reject(fn {label, _value} -> is_nil(label) end)
+    |> maybe_include_all(spec)
   end
 
   def select_options(spec, _datasources, _vars) do
@@ -106,7 +116,14 @@ defmodule Observe.Variables do
     |> Map.get("values", [])
     |> Enum.map(fn value -> {option_label(to_string(value), matcher, spec), value} end)
     |> Enum.reject(fn {label, _value} -> is_nil(label) end)
+    |> maybe_include_all(spec)
   end
+
+  defp maybe_include_all(options, %{"include_all" => true} = spec) do
+    [{"All", Map.get(spec, "all_value", ".*")} | options]
+  end
+
+  defp maybe_include_all(options, _spec), do: options
 
   def interpolate(value, vars, inputs \\ %{})
 
@@ -136,6 +153,7 @@ defmodule Observe.Variables do
 
   defp label_values(spec, datasources, vars) do
     datasource_ref = spec |> Map.get("datasource") |> interpolate(vars)
+    spec = interpolate(spec, vars)
 
     case Map.get(datasources, datasource_ref) do
       %{"type" => "prometheus"} = datasource ->
@@ -150,8 +168,11 @@ defmodule Observe.Variables do
   end
 
   defp ordered_variables(variables) do
-    Enum.sort_by(variables, fn {_name, spec} ->
-      if Map.get(spec, "type") == "label_values", do: 1, else: 0
+    Enum.sort_by(variables, fn {name, spec} ->
+      case Map.get(spec, "_order") do
+        order when is_integer(order) -> {0, order}
+        _order -> {1, name}
+      end
     end)
   end
 

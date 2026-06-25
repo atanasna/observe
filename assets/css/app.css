@@ -165,6 +165,15 @@ body {
     linear-gradient(180deg, rgb(203 166 247 / 0.22), transparent 12rem) top left / 1px 100% no-repeat;
 }
 
+.dashboard-header-shell {
+  overflow: visible;
+  z-index: 30;
+}
+
+.dashboard-time-picker[open] {
+  z-index: 60;
+}
+
 .mocha-card {
   border: 1px solid rgb(180 190 254 / 0.20);
   background: linear-gradient(145deg, rgb(49 50 68 / 0.62), rgb(24 24 37 / 0.84));

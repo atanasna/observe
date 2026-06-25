@@ -8,32 +8,86 @@ defmodule Observe.Executor do
   alias Observe.Datasources.Prometheus
 
   def run(dashboard, params \\ %{}, opts \\ %{}) do
-    datasources = Observe.Store.datasources()
+    datasources = datasources(opts)
     vars = Variables.merge(Map.get(dashboard, "variables", %{}), params, datasources)
 
     with {:ok, plan} <- QueryGraph.plan(dashboard, datasources, vars) do
-      datasets =
-        Enum.reduce(plan.query_order, %{}, fn name, datasets ->
-          execute_query(name, plan, datasets, opts)
-        end)
+      datasets = execute_plan(plan, opts, fn _event -> :ok end)
 
       {:ok, %{plan: plan, datasets: datasets}}
     end
   end
 
-  defp execute_query(name, plan, datasets, opts) do
+  def run_stream(dashboard, params, opts, notify) when is_function(notify, 1) do
+    datasources = datasources(opts)
+    vars = Variables.merge(Map.get(dashboard, "variables", %{}), params, datasources)
+
+    with {:ok, plan} <- QueryGraph.plan(dashboard, datasources, vars) do
+      notify.({:plan, plan})
+
+      execute_plan(plan, opts, notify)
+
+      notify.(:complete)
+      :ok
+    end
+  end
+
+  defp datasources(opts), do: Map.get(opts, :datasources) || Observe.Store.datasources()
+
+  defp execute_plan(plan, opts, notify) do
+    execute_pending(plan.query_order, plan, %{}, opts, notify)
+  end
+
+  defp execute_pending([], _plan, datasets, _opts, _notify), do: datasets
+
+  defp execute_pending(pending, plan, datasets, opts, notify) do
+    {runnable, waiting} = Enum.split_with(pending, &runnable?(&1, plan, datasets))
+
+    if runnable == [] do
+      datasets
+    else
+      datasets = execute_runnable(runnable, plan, datasets, opts, notify)
+      execute_pending(waiting, plan, datasets, opts, notify)
+    end
+  end
+
+  defp runnable?(name, plan, datasets) do
     query = plan.queries[name]
 
-    dataset =
-      case query["kind"] do
-        "source" ->
-          source_dataset(name, query, plan, opts)
+    query["kind"] == "source" or Map.has_key?(datasets, query["from"])
+  end
 
-        "derived" ->
-          transform_dataset(Map.get(datasets, query["from"], []), Map.get(query, "transform", []))
-      end
+  defp execute_runnable(runnable, plan, datasets, opts, notify) do
+    runnable
+    |> Task.async_stream(
+      fn name -> {name, query_dataset(name, plan, datasets, opts)} end,
+      max_concurrency: max_concurrency(opts),
+      ordered: false,
+      timeout: :infinity
+    )
+    |> Enum.reduce(datasets, fn {:ok, {name, dataset}}, acc ->
+      notify.({:dataset, name, dataset})
+      Map.put(acc, name, dataset)
+    end)
+  end
 
-    Map.put(datasets, name, dataset)
+  defp max_concurrency(opts) do
+    case Map.get(opts, :max_concurrency) do
+      value when is_integer(value) and value > 0 -> value
+      _value -> System.schedulers_online()
+    end
+  end
+
+  defp query_dataset(name, plan, datasets, opts) do
+    query = plan.queries[name]
+
+    case query["kind"] do
+      "source" ->
+        source_dataset(name, query, plan, opts)
+
+      "derived" ->
+        transform_dataset(Map.get(datasets, query["from"], []), Map.get(query, "transform", []))
+    end
   end
 
   defp source_dataset(name, query, plan, opts) do
@@ -41,18 +95,24 @@ defmodule Observe.Executor do
     type = get_in(datasource, [:config, "type"]) || get_in(datasource, ["config", "type"])
     query = Variables.interpolate(query, plan.variable_context || plan.variables)
 
-    case type do
-      "prometheus" ->
-        prometheus_rows(name, datasource[:config] || datasource["config"], query, opts)
+    case Map.get(opts, :source_dataset) do
+      fun when is_function(fun, 2) ->
+        fun.(name, query)
 
-      "cloudwatch" ->
-        cloudwatch_rows(name)
+      _fun ->
+        case type do
+          "prometheus" ->
+            prometheus_rows(name, datasource[:config] || datasource["config"], query, opts)
 
-      "opensearch" ->
-        opensearch_rows(name)
+          "cloudwatch" ->
+            cloudwatch_rows(name)
 
-      _ ->
-        generic_rows(name)
+          "opensearch" ->
+            opensearch_rows(name)
+
+          _ ->
+            generic_rows(name)
+        end
     end
   end
 

@@ -15,6 +15,30 @@ variables:
     datasource: ${vars.source}
     metric: app_queue_low_running_size
     metric_label: deployment
+  priority:
+    type: label_values
+    datasource: ${vars.source}
+    metric: app_queue_job_count{deployment="${vars.deployment}"}
+    metric_label: priority
+    include_all: true
+    all_value: .*
+    default: .*
+  tenant:
+    type: label_values
+    datasource: ${vars.source}
+    metric: app_queue_job_count{deployment="${vars.deployment}"}
+    metric_label: tenant
+    include_all: true
+    all_value: .*
+    default: .*
+  job:
+    type: label_values
+    datasource: ${vars.source}
+    metric: app_queue_job_count{deployment="${vars.deployment}"}
+    metric_label: exported_job
+    include_all: true
+    all_value: .*
+    default: .*
 
 datasources:
   prometheus:
@@ -25,6 +49,7 @@ layout:
 
 queryRefs:
   - queue
+  - queue_job_execution_time
 
 datasets:
   # Pending Jobs
@@ -114,6 +139,13 @@ datasets:
       deployment: ${vars.deployment}
       state: "delayed"
       priority: "bulk"
+  queue_execution_time:
+    query: queue_job_execution_time
+    inputs:
+      deployment: ${vars.deployment}
+      tenant: ${vars.tenant}
+      job: ${vars.job}
+      priority: ${vars.priority}
 
 panels:
   - id: pending
@@ -133,6 +165,8 @@ panels:
     title: Running
     description: Running queue size by priority for the selected deployment.
     type: timeseries
+    legend:
+      position: right
     stacked: true
     layout:
       width: 8
@@ -146,6 +180,8 @@ panels:
     description: Delayed queue size by priority for the selected deployment.
     title: Delayed
     type: timeseries
+    legend:
+      position: right
     stacked: true
     layout:
       width: 8
@@ -155,3 +191,20 @@ panels:
       - queue_low_delayed
       - queue_high_delayed
       - queue_bulk_delayed
+
+  - id: experimental
+    title: Experimental
+    type: row
+    collapsed: true
+
+  - id: execution-time
+    title: Exeution Time
+    description: Average execution time for the top default-priority jobs by tenant and job.
+    type: timeseries
+    legend:
+      position: right
+      format: "{{tenant}} - {{priority}} - {{exported_job}}"
+    layout:
+      width: 8
+      height: 300 
+    dataset: queue_execution_time

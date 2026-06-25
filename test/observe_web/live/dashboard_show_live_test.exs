@@ -30,17 +30,29 @@ defmodule ObserveWeb.DashboardShowLiveTest do
     assert has_element?(view, "#dashboard-info-drawer")
   end
 
-  test "renders queue dashboard with dependent variable selector and one panel", %{conn: conn} do
+  test "renders queue dashboard with dependent variables and collapsible panel sections", %{
+    conn: conn
+  } do
     {:ok, view, _html} = live(conn, ~p"/dashboards/queue")
 
     assert has_element?(view, "#variables_source")
     assert has_element?(view, "#variables_deployment")
+    assert has_element?(view, "#variables_tenant")
     assert has_element?(view, "#panel-pending")
     assert has_element?(view, ~s(#panel-pending[data-stacked="true"]))
     assert has_element?(view, ~s(#panel-pending[data-legend-position="bottom"]))
     assert has_element?(view, ~s(#panel-pending[data-layout-width="16"]))
     assert has_element?(view, ~s(#panel-pending[data-layout-height="300"]))
     assert has_element?(view, ~s(#panel-pending button[aria-label="Panel description"]))
+    assert has_element?(view, ~s(#panel-experimental[data-section-collapsed="true"]))
+    refute has_element?(view, "#panel-jobs-execution-time-default")
     assert render(view) =~ "Pending queue size by priority"
+
+    view
+    |> element("#section-toggle-experimental")
+    |> render_click()
+
+    assert has_element?(view, ~s(#panel-experimental[data-section-collapsed="false"]))
+    assert has_element?(view, "#panel-jobs-execution-time-default")
   end
 end

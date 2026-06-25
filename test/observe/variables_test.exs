@@ -167,4 +167,19 @@ defmodule Observe.VariablesTest do
     assert Variables.select_options(spec, datasources, %{"source" => "eu-charge"}) == []
     assert Variables.select_options(spec, datasources, %{"source" => "logs"}) == []
   end
+
+  test "variables can include an all option" do
+    spec = %{
+      "type" => "enum",
+      "values" => ["one", "two"],
+      "include_all" => true,
+      "all_value" => ".*"
+    }
+
+    assert Variables.select_options(spec, %{}) == [{"All", ".*"}, {"one", "one"}, {"two", "two"}]
+
+    assert Variables.defaults(%{"tenant" => Map.put(spec, "default", ".*")}, %{}) == %{
+             "tenant" => ".*"
+           }
+  end
 end

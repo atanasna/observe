@@ -8,6 +8,7 @@ let resetButton = null
 export const D3Timeseries = {
   mounted() {
     this.selectedLabels = new Set()
+    this.legendVisible = false
     this.zoomChanged = () => this.scheduleRender()
     this.fullscreenChanged = () => this.scheduleRender()
     window.addEventListener(zoomChangedEvent, this.zoomChanged)
@@ -35,11 +36,13 @@ export const D3Timeseries = {
     const payload = JSON.parse(this.el.dataset.chart || "{\"series\":[]}")
     const stacked = this.el.dataset.stacked === "true"
     const legendPosition = legendPositionValue(this.el.dataset.legendPosition)
-    const sideLegend = legendPosition === "left" || legendPosition === "right"
+    const sideLegend = this.legendVisible && (legendPosition === "left" || legendPosition === "right")
     const style = getComputedStyle(this.el)
     const horizontalPadding = parseFloat(style.paddingLeft || 0) + parseFloat(style.paddingRight || 0)
     const measuredWidth = this.el.getBoundingClientRect().width - horizontalPadding
-    const width = Math.max((measuredWidth || 640) - (sideLegend ? 180 : 0), 320)
+    const legendWidth = sideLegend ? sideLegendWidth(payload.series, measuredWidth || 640) : 0
+    const sideLegendGap = sideLegend ? 8 : 0
+    const width = Math.max((measuredWidth || 640) - legendWidth - sideLegendGap, 160)
     const fullscreen = document.fullscreenElement === this.el
     const height = fullscreen ? Math.max(window.innerHeight - 120, 320) : Math.max(Number(this.el.dataset.height || 160), 120)
     const margin = {top: 14, right: 12, bottom: 22, left: 42}
@@ -55,6 +58,20 @@ export const D3Timeseries = {
 
     const controls = document.createElement("div")
     controls.className = "mb-2 flex items-center justify-end gap-1.5"
+
+    const legendButton = iconButton({
+      label: this.legendVisible ? "Hide legend" : "Show legend",
+      className: this.legendVisible
+        ? "border-[#89dceb]/35 text-[#89dceb] hover:border-[#f5c2e7]/45 hover:text-[#f5c2e7]"
+        : "border-[#b4befe]/20 text-[#6c7086] hover:border-[#89dceb]/40 hover:text-[#89dceb]",
+      icon: legendIcon()
+    })
+    legendButton.setAttribute("aria-pressed", this.legendVisible ? "true" : "false")
+    legendButton.addEventListener("click", () => {
+      this.legendVisible = !this.legendVisible
+      this.render()
+    })
+    controls.appendChild(legendButton)
 
     const fullscreenButton = iconButton({
       label: fullscreen ? "Exit fullscreen" : "Fullscreen",
@@ -98,7 +115,7 @@ export const D3Timeseries = {
       : d3.extent(domainPoints, point => point[1])
     const yPadding = !stacked && yExtent[0] === yExtent[1] ? Math.max(Math.abs(yExtent[0] || 1) * 0.1, 1) : 0
 
-    const x = d3.scaleTime()
+    const x = d3.scaleUtc()
       .domain([new Date(xDomain[0] * 1000), new Date(xDomain[1] * 1000)])
       .range([0, innerWidth])
 
@@ -119,11 +136,21 @@ export const D3Timeseries = {
 
     const svgHost = document.createElement("div")
     svgHost.className = "min-w-0 flex-1"
+    if (sideLegend) {
+      svgHost.style.width = `${width}px`
+      svgHost.style.flex = "0 0 auto"
+    }
 
     const legendHost = document.createElement("div")
     legendHost.className = legendClass(legendPosition)
+    if (sideLegend) {
+      legendHost.style.width = `${legendWidth}px`
+      legendHost.style.maxHeight = `${height}px`
+    }
 
-    if (legendPosition === "top" || legendPosition === "left") {
+    if (!this.legendVisible) {
+      chartBody.appendChild(svgHost)
+    } else if (legendPosition === "top" || legendPosition === "left") {
       chartBody.appendChild(legendHost)
       chartBody.appendChild(svgHost)
     } else {
@@ -133,12 +160,13 @@ export const D3Timeseries = {
 
     const svg = d3.select(svgHost)
       .append("svg")
-      .attr("width", "100%")
+      .attr("width", width)
       .attr("height", height)
       .attr("viewBox", `0 0 ${width} ${height}`)
       .attr("role", "img")
       .style("display", "block")
-      .style("max-width", "100%")
+      .style("width", sideLegend ? `${width}px` : "100%")
+      .style("max-width", sideLegend ? "none" : "100%")
 
     const g = svg.append("g")
       .attr("transform", `translate(${margin.left},${margin.top})`)
@@ -209,33 +237,30 @@ export const D3Timeseries = {
     const hoverDots = g.append("g").attr("opacity", 0)
 
     const showHover = event => {
-      const [mouseX] = d3.pointer(event, g.node())
-      const timestamp = x.invert(mouseX).getTime() / 1000
-      const nearest = nearestPoints(domainSeries, timestamp)
-      if (nearest.length === 0) return
+      const [mouseX, mouseY] = d3.pointer(event, g.node())
+      const nearest = nearestPointForCursor(domainSeries, mouseX, mouseY, x, y, stacked, stackData)
+      if (!nearest) return
 
-      const nearestX = x(new Date(nearest[0].point[0] * 1000))
-      hoverLine.attr("x1", nearestX).attr("x2", nearestX).attr("opacity", 0.8)
+      hoverLine.attr("x1", mouseX).attr("x2", mouseX).attr("opacity", 0.8)
       hoverDots.attr("opacity", 1)
       hoverDots.selectAll("circle")
-        .data(nearest, item => item.series.label)
+        .data([nearest], item => item.series.label)
         .join("circle")
         .attr("cx", item => x(new Date(item.point[0] * 1000)))
         .attr("cy", item => y(stacked ? stackedPointTop(stackData, item.series.label, item.point[0]) : item.point[1]))
-        .attr("r", 3)
+        .attr("r", 4)
         .attr("fill", item => colors[payload.series.findIndex(series => series.label === item.series.label) % colors.length])
         .attr("stroke", "#11111b")
 
       const [tooltipX, tooltipY] = d3.pointer(event, this.el)
-      const date = new Date(nearest[0].point[0] * 1000)
+      const date = new Date(nearest.point[0] * 1000)
       tooltip
         .classed("hidden", false)
         .style("left", `${Math.min(tooltipX + 14, width - 220)}px`)
         .style("top", `${Math.max(tooltipY - 10, 40)}px`)
         .html([
-          `<div class="mb-1 font-semibold text-[#89dceb]">${date.toLocaleString()}</div>`,
-          ...nearest.map(item => `<div><span style="color:${colors[payload.series.findIndex(series => series.label === item.series.label) % colors.length]}">●</span> ${escapeHtml(item.series.label)}: <span class="font-semibold">${formatValue(item.point[1])}</span></div>`),
-          stacked ? `<div class="mt-1 border-t border-[#45475a] pt-1 text-[#bac2de]">Total: <span class="font-semibold">${formatValue(d3.sum(nearest, item => item.point[1]))}</span></div>` : ""
+          `<div class="mb-1 font-semibold text-[#89dceb]">${formatTimestamp(date)}</div>`,
+          `<div><span style="color:${colors[payload.series.findIndex(series => series.label === nearest.series.label) % colors.length]}">●</span> ${escapeHtml(nearest.series.label)}: <span class="font-semibold">${formatValue(nearest.point[1])}</span></div>`
         ].join(""))
     }
 
@@ -272,6 +297,8 @@ export const D3Timeseries = {
       .attr("fill-opacity", 0.18)
       .attr("stroke", "#89dceb")
 
+    if (!this.legendVisible) return
+
     const legend = d3.select(legendHost)
 
     payload.series.forEach((series, index) => {
@@ -299,7 +326,7 @@ export const D3Timeseries = {
         .attr("class", "size-2 shrink-0")
         .style("background", colors[index % colors.length])
       item.append("span")
-        .attr("class", "truncate text-[#bac2de]")
+        .attr("class", sideLegend ? "whitespace-nowrap text-[#bac2de]" : "truncate text-[#bac2de]")
         .text(series.label)
     })
   },
@@ -357,10 +384,25 @@ function chartBodyClass(position) {
 
 function legendClass(position) {
   if (position === "left" || position === "right") {
-    return "grid max-h-40 gap-1.5 overflow-auto text-xs md:max-h-none md:w-44 md:shrink-0 md:grid-cols-1"
+    return "grid max-h-40 gap-1.5 overflow-auto text-xs md:shrink-0 md:grid-cols-1"
   }
 
   return "flex max-h-20 flex-wrap items-center gap-1.5 overflow-auto text-xs"
+}
+
+function sideLegendWidth(seriesList, panelWidth) {
+  const maxWidth = panelWidth * 0.5
+  const measuredWidth = d3.max(seriesList, series => textWidth(series.label)) || 0
+
+  return Math.min(Math.ceil(measuredWidth + 38), maxWidth)
+}
+
+function textWidth(value) {
+  const canvas = textWidth.canvas || (textWidth.canvas = document.createElement("canvas"))
+  const context = canvas.getContext("2d")
+  context.font = "600 12px ui-sans-serif, system-ui, sans-serif"
+
+  return context.measureText(String(value)).width
 }
 
 function bindGlobalResetButton() {
@@ -389,6 +431,10 @@ function fullscreenIcon() {
 
 function exitFullscreenIcon() {
   return `<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" class="size-4"><path d="M8.75 3a.75.75 0 0 1 .75.75v4A.75.75 0 0 1 8.75 8.5h-4a.75.75 0 0 1 0-1.5h2.19L3.72 3.78a.75.75 0 0 1 1.06-1.06L8 5.94V3.75A.75.75 0 0 1 8.75 3ZM11.25 3a.75.75 0 0 1 .75.75v2.19l3.22-3.22a.75.75 0 1 1 1.06 1.06L13.06 7h2.19a.75.75 0 0 1 0 1.5h-4a.75.75 0 0 1-.75-.75v-4A.75.75 0 0 1 11.25 3ZM3.75 11.5h4a.75.75 0 0 1 .75.75v4a.75.75 0 0 1-1.5 0v-2.19l-3.22 3.22a.75.75 0 0 1-1.06-1.06L5.94 13H3.75a.75.75 0 0 1 0-1.5ZM11.25 11.5h4a.75.75 0 0 1 0 1.5h-2.19l3.22 3.22a.75.75 0 1 1-1.06 1.06L12 14.06v2.19a.75.75 0 0 1-1.5 0v-4a.75.75 0 0 1 .75-.75Z" /></svg>`
+}
+
+function legendIcon() {
+  return `<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" class="size-4"><path d="M4 5.25A1.25 1.25 0 1 1 1.5 5.25 1.25 1.25 0 0 1 4 5.25ZM6.25 4.5a.75.75 0 0 0 0 1.5h11.5a.75.75 0 0 0 0-1.5H6.25ZM6.25 9.25a.75.75 0 0 0 0 1.5h11.5a.75.75 0 0 0 0-1.5H6.25ZM5.5 14.75a.75.75 0 0 1 .75-.75h11.5a.75.75 0 0 1 0 1.5H6.25a.75.75 0 0 1-.75-.75ZM2.75 11.25a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5ZM4 14.75a1.25 1.25 0 1 1-2.5 0 1.25 1.25 0 0 1 2.5 0Z" /></svg>`
 }
 
 function setGlobalZoomDomain(domain) {
@@ -425,21 +471,31 @@ function filterSeriesByDomain(seriesList, xDomain) {
   return filtered.length > 0 ? filtered : seriesList
 }
 
-function nearestPoints(seriesList, timestamp) {
+function nearestPointForCursor(seriesList, mouseX, mouseY, x, y, stacked, stackData) {
   return seriesList
-    .map(series => {
-      const point = series.points.reduce((nearest, point) => {
-        if (!nearest) return point
-        return Math.abs(point[0] - timestamp) < Math.abs(nearest[0] - timestamp) ? point : nearest
-      }, null)
-      return point ? {series, point} : null
-    })
-    .filter(Boolean)
-    .sort((left, right) => left.series.label.localeCompare(right.series.label))
+    .flatMap(series => series.points.map(point => {
+      const pointX = x(new Date(point[0] * 1000))
+      const pointY = y(stacked ? stackedPointTop(stackData, series.label, point[0]) : point[1])
+
+      return {
+        series,
+        point,
+        distance: Math.hypot(pointX - mouseX, pointY - mouseY)
+      }
+    }))
+    .filter(item => Number.isFinite(item.distance))
+    .reduce((nearest, item) => {
+      if (!nearest) return item
+      return item.distance < nearest.distance ? item : nearest
+    }, null)
 }
 
 function formatValue(value) {
   return Number.isFinite(value) ? value.toLocaleString(undefined, {maximumFractionDigits: 3}) : String(value)
+}
+
+function formatTimestamp(date) {
+  return d3.utcFormat("%Y-%m-%d %H:%M:%S UTC")(date)
 }
 
 function escapeHtml(value) {

@@ -29,5 +29,13 @@ datasources:
       username: admin
       password: master@ampeco.tech
 
+  sg-charge:
+    type: prometheus
+    mode: real
+    url: https://prometheus.sg.infra.charge.ampeco.tech
+    basic_auth:
+      username: admin
+      password: master@ampeco.tech
+
 
 
