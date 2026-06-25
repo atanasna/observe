@@ -22,7 +22,7 @@ variables:
     metric_label: priority
     include_all: true
     all_value: .*
-    default: .*
+    default: default
   tenant:
     type: label_values
     datasource: ${vars.source}
@@ -139,13 +139,15 @@ datasets:
       deployment: ${vars.deployment}
       state: "delayed"
       priority: "bulk"
-  queue_execution_time:
+  queue_default_execution_time:
     query: queue_job_execution_time
+    no_value: 0
+    fill_missing: 0
     inputs:
       deployment: ${vars.deployment}
       tenant: ${vars.tenant}
       job: ${vars.job}
-      priority: ${vars.priority}
+      priority: "default"
 
 panels:
   - id: pending
@@ -199,7 +201,7 @@ panels:
 
   - id: execution-time
     title: Execution Time
-    description: Average execution time for the top default-priority jobs by tenant and job.
+    description: Average execution time for the top 10 default-priority jobs by tenant and job.
     type: timeseries
     legend:
       position: right
@@ -207,4 +209,4 @@ panels:
     layout:
       width: 8
       height: 300 
-    dataset: queue_execution_time
+    dataset: queue_default_execution_time

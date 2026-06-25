@@ -60,7 +60,9 @@ defmodule Observe.Executor do
   defp execute_runnable(runnable, plan, datasets, opts, notify) do
     runnable
     |> Task.async_stream(
-      fn name -> {name, query_dataset(name, plan, datasets, opts)} end,
+      fn name ->
+        {name, query_dataset(name, plan, datasets, opts) |> normalize_dataset(name, plan, opts)}
+      end,
       max_concurrency: max_concurrency(opts),
       ordered: false,
       timeout: :infinity
@@ -88,6 +90,94 @@ defmodule Observe.Executor do
       "derived" ->
         transform_dataset(Map.get(datasets, query["from"], []), Map.get(query, "transform", []))
     end
+  end
+
+  defp normalize_dataset(rows, name, plan, opts) do
+    dataset = Map.get(plan.datasets || %{}, name, %{})
+    query = Map.get(plan.queries || %{}, name, %{})
+
+    rows
+    |> normalize_no_value(dataset)
+    |> fill_missing_rows(dataset, query, opts)
+  end
+
+  defp normalize_no_value(rows, dataset) do
+    case Map.get(dataset, "no_value") do
+      replacement when is_number(replacement) ->
+        Enum.map(rows, &replace_no_value(&1, replacement))
+
+      _value ->
+        rows
+    end
+  end
+
+  defp replace_no_value(%{} = row, replacement) do
+    if no_value?(Map.get(row, "value")) do
+      Map.put(row, "value", replacement)
+    else
+      row
+    end
+  end
+
+  defp replace_no_value(row, _replacement), do: row
+
+  defp no_value?(value), do: value in [nil, "NaN", "Inf", "+Inf", "-Inf"]
+
+  defp fill_missing_rows(rows, dataset, query, opts) do
+    with fill_value when is_number(fill_value) <- Map.get(dataset, "fill_missing"),
+         %{from: from, to: to} <- Map.get(opts, :time_range),
+         step when is_integer(step) and step > 0 <- query_step_seconds(query),
+         [_ | _] = timestamps <- expected_timestamps(from, to, step) do
+      fill_series(rows, timestamps, fill_value)
+    else
+      _value -> rows
+    end
+  end
+
+  defp query_step_seconds(query) do
+    query
+    |> get_in(["request", "step"])
+    |> Kernel.||(get_in(query, ["request", "interval"]))
+    |> interval_seconds()
+  end
+
+  defp interval_seconds(value) when is_integer(value) and value > 0, do: value
+
+  defp interval_seconds(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {amount, "s"} when amount > 0 -> amount
+      {amount, "m"} when amount > 0 -> amount * 60
+      {amount, "h"} when amount > 0 -> amount * 60 * 60
+      {amount, ""} when amount > 0 -> amount
+      _invalid -> nil
+    end
+  end
+
+  defp interval_seconds(_value), do: nil
+
+  defp expected_timestamps(from, to, step)
+       when is_integer(from) and is_integer(to) and from <= to do
+    Enum.to_list(from..to//step)
+  end
+
+  defp expected_timestamps(_from, _to, _step), do: []
+
+  defp fill_series(rows, timestamps, fill_value) do
+    rows
+    |> Enum.group_by(&series_key/1)
+    |> Enum.flat_map(fn {labels, series_rows} ->
+      rows_by_time = Map.new(series_rows, &{Map.get(&1, "time"), &1})
+
+      Enum.map(timestamps, fn timestamp ->
+        Map.get(rows_by_time, timestamp) ||
+          Map.merge(labels, %{"time" => timestamp, "value" => fill_value})
+      end)
+    end)
+  end
+
+  defp series_key(row) do
+    row
+    |> Map.drop(["time", "value", "raw_value", "dataset", "dataset_label"])
   end
 
   defp source_dataset(name, query, plan, opts) do

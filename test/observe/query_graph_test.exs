@@ -33,9 +33,9 @@ defmodule Observe.QueryGraphTest do
     panel =
       dashboards
       |> get_in(["queue", "panels"])
-      |> Enum.find(&(Map.get(&1, "id") == "jobs-execution-time-default"))
+      |> Enum.find(&(Map.get(&1, "id") == "execution-time"))
 
-    assert get_in(panel, ["legend", "format"]) == "{{tenant}} [{{domain}}] {{exported_job}}"
+    assert get_in(panel, ["legend", "format"]) == "{{tenant}} - {{priority}} - {{exported_job}}"
   end
 
   test "queue tenant variable is scoped by selected deployment" do
@@ -58,7 +58,13 @@ defmodule Observe.QueryGraphTest do
     assert dashboards
            |> get_in(["queue", "variables"])
            |> Observe.Variables.ordered()
-           |> Enum.map(fn {name, _spec} -> name end) == ["source", "deployment", "tenant"]
+           |> Enum.map(fn {name, _spec} -> name end) == [
+             "source",
+             "deployment",
+             "priority",
+             "tenant",
+             "job"
+           ]
   end
 
   test "skips invalid dashboards instead of failing the full dashboard load" do

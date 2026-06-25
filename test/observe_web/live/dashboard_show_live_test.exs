@@ -53,6 +53,6 @@ defmodule ObserveWeb.DashboardShowLiveTest do
     |> render_click()
 
     assert has_element?(view, ~s(#panel-experimental[data-section-collapsed="false"]))
-    assert has_element?(view, "#panel-jobs-execution-time-default")
+    assert has_element?(view, "#panel-execution-time")
   end
 end

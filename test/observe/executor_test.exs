@@ -70,6 +70,79 @@ defmodule Observe.ExecutorTest do
     assert :ok = Task.await(task)
   end
 
+  test "normalizes no-value samples from dataset config" do
+    dashboard = %{
+      "variables" => %{},
+      "datasources" => %{"prometheus" => %{"ref" => "fake-prometheus"}},
+      "queries" => %{
+        "execution_time" => %{"datasource" => "prometheus", "request" => %{"query" => "query"}}
+      },
+      "datasets" => %{
+        "queue_execution_time" => %{"query" => "execution_time", "no_value" => 0}
+      },
+      "panels" => [
+        %{"id" => "execution-time", "type" => "timeseries", "dataset" => "queue_execution_time"}
+      ]
+    }
+
+    assert {:ok, %{datasets: %{"queue_execution_time" => rows}}} =
+             Executor.run(dashboard, %{}, %{
+               datasources: %{"fake-prometheus" => %{"type" => "prometheus"}},
+               source_dataset: fn "queue_execution_time", _query ->
+                 [
+                   %{"time" => 1, "value" => "NaN"},
+                   %{"time" => 2, "value" => "+Inf"},
+                   %{"time" => 3, "value" => "-Inf"},
+                   %{"time" => 4, "value" => nil},
+                   %{"time" => 5, "value" => 12.5}
+                 ]
+               end
+             })
+
+    assert Enum.map(rows, & &1["value"]) == [0, 0, 0, 0, 12.5]
+  end
+
+  test "fills missing samples from dataset config and query interval" do
+    dashboard = %{
+      "variables" => %{},
+      "datasources" => %{"prometheus" => %{"ref" => "fake-prometheus"}},
+      "queries" => %{
+        "execution_time" => %{
+          "datasource" => "prometheus",
+          "request" => %{"query" => "query", "range" => true, "interval" => "1m"}
+        }
+      },
+      "datasets" => %{
+        "queue_execution_time" => %{"query" => "execution_time", "fill_missing" => 0}
+      },
+      "panels" => [
+        %{"id" => "execution-time", "type" => "timeseries", "dataset" => "queue_execution_time"}
+      ]
+    }
+
+    assert {:ok, %{datasets: %{"queue_execution_time" => rows}}} =
+             Executor.run(dashboard, %{}, %{
+               datasources: %{"fake-prometheus" => %{"type" => "prometheus"}},
+               time_range: %{from: 60, to: 180},
+               source_dataset: fn "queue_execution_time", _query ->
+                 [
+                   %{"tenant" => "a", "time" => 60, "value" => 1},
+                   %{"tenant" => "a", "time" => 180, "value" => 3},
+                   %{"tenant" => "b", "time" => 120, "value" => 2}
+                 ]
+               end
+             })
+
+    assert rows_by_series_and_time(rows) == %{
+             {"a", 60} => 1,
+             {"a", 120} => 0,
+             {"a", 180} => 3,
+             {"b", 60} => 0,
+             {"b", 120} => 2,
+             {"b", 180} => 0
+           }
+  end
+
   defp source_dashboard do
     %{
       "variables" => %{},
@@ -88,5 +161,9 @@ defmodule Observe.ExecutorTest do
     after
       0 -> events
     end
+  end
+
+  defp rows_by_series_and_time(rows) do
+    Map.new(rows, fn row -> {{row["tenant"], row["time"]}, row["value"]} end)
   end
 end
