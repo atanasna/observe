@@ -26,7 +26,7 @@ defmodule ObserveWeb.DashboardShowLiveTest do
   test "renders dashboard while datasets are pulled in the background", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/dashboards/laravel")
 
-    assert has_element?(view, "#refresh-dashboard")
+    refute has_element?(view, "#refresh-dashboard")
     assert has_element?(view, "#panel-grid")
     assert has_element?(view, "#dashboard-info-drawer")
   end

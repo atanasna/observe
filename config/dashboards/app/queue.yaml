@@ -22,7 +22,7 @@ variables:
     metric_label: priority
     include_all: true
     all_value: .*
-    default: default
+    default: .*
   tenant:
     type: label_values
     datasource: ${vars.source}

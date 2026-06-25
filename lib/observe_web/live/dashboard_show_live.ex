@@ -326,7 +326,7 @@ defmodule ObserveWeb.DashboardShowLive do
   defp refresh_ms(_interval), do: nil
 
   defp refresh_options do
-    [{"Off", "off"}, {"10s", "10s"}, {"30s", "30s"}, {"1m", "1m"}, {"5m", "5m"}]
+    [{"↻", "off"}, {"10s", "10s"}, {"30s", "30s"}, {"1m", "1m"}, {"5m", "5m"}]
   end
 
   defp selected_time_range(%{assigns: %{time_range_preset: preset}} = socket)
@@ -439,13 +439,7 @@ defmodule ObserveWeb.DashboardShowLive do
         <div class="dashboard-header-shell mocha-shell sharp-corner p-3 md:p-4">
           <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div>
-              <.link
-                navigate={~p"/dashboards"}
-                class="text-xs font-semibold text-[#89dceb] transition hover:text-[#f5c2e7]"
-              >
-                Back to dashboards
-              </.link>
-              <h1 class="mocha-heading mt-1 text-2xl font-semibold tracking-tight md:text-3xl">
+              <h1 class="mocha-heading text-2xl font-semibold tracking-tight md:text-3xl">
                 {get_in(@dashboard, ["metadata", "title"]) || get_in(@dashboard, ["metadata", "name"])}
               </h1>
               <p class="mocha-muted mt-1 text-xs">
@@ -551,14 +545,13 @@ defmodule ObserveWeb.DashboardShowLive do
                     </div>
                   </div>
                 </details>
-                <div>
-                  <label class="mb-1 block text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-[#89dceb]">
-                    Refresh
-                  </label>
+                <div class="flex items-end">
                   <select
                     id="dashboard-refresh-interval"
                     name="controls[refresh_interval]"
-                    class="border border-[#b4befe]/15 bg-[#11111b]/55 px-2 py-1.5 text-xs font-semibold text-[#cdd6f4] outline-none transition focus:border-[#cba6f7]/70 focus:bg-[#181825]"
+                    aria-label="Refresh interval"
+                    title="Refresh interval"
+                    class="min-h-8 border border-[#b4befe]/15 bg-[#11111b]/55 px-2 py-1.5 text-xs font-semibold text-[#cdd6f4] outline-none transition focus:border-[#cba6f7]/70 focus:bg-[#181825]"
                   >
                     <option
                       :for={{label, value} <- refresh_options()}
@@ -570,17 +563,6 @@ defmodule ObserveWeb.DashboardShowLive do
                   </select>
                 </div>
               </.form>
-              <button
-                id="refresh-dashboard"
-                phx-click="refresh"
-                class="mocha-button sharp-corner flex items-center gap-2 px-3 py-2 text-xs font-semibold transition"
-              >
-                <span
-                  :if={@loading?}
-                  class="inline-block size-3 animate-spin rounded-full border-2 border-[#11111b]/35 border-t-[#11111b]"
-                />
-                {if @loading?, do: "Loading", else: "Run"}
-              </button>
             </div>
           </div>
 
@@ -722,11 +704,11 @@ defmodule ObserveWeb.DashboardShowLive do
             data-layout-height={panel_height(panel, 160)}
             style={"--panel-width: #{panel_width(panel, @dashboard)}"}
             class={[
-              "mocha-card sharp-corner p-3 transition duration-300",
-              panel["type"] == "row" && ""
+              "mocha-card sharp-corner transition duration-300",
+              if(panel["type"] == "row", do: "p-1.5", else: "p-3")
             ]}
           >
-            <div class="mb-2 flex items-center gap-1.5">
+            <div :if={panel["type"] != "row"} class="mb-2 flex items-center gap-1.5">
               <h2 class="text-sm font-semibold text-[#cdd6f4]">{panel["title"]}</h2>
               <span :if={panel_description(panel)} class="group relative inline-flex items-center">
                 <button
@@ -761,12 +743,17 @@ defmodule ObserveWeb.DashboardShowLive do
                       phx-click="toggle_panel_section"
                       phx-value-id={panel["id"]}
                       aria-expanded={!section_collapsed?(panel, @collapsed_sections) |> to_string()}
-                      class="flex w-full items-center justify-between border-l-2 border-[#cba6f7] bg-[#11111b]/40 px-3 py-1.5 text-left text-xs font-semibold uppercase tracking-[0.22em] text-[#f5c2e7] transition hover:border-[#f5c2e7] hover:bg-[#313244]/55"
+                      class="flex w-full items-center justify-between border-l-2 border-[#cba6f7] bg-[#11111b]/40 px-2.5 py-1 text-left text-xs font-semibold uppercase tracking-[0.18em] text-[#f5c2e7] transition hover:border-[#f5c2e7] hover:bg-[#313244]/55"
                     >
                       <span>{panel["title"]}</span>
-                      <span class="text-[#cba6f7]">
-                        {if section_collapsed?(panel, @collapsed_sections), do: "Show", else: "Hide"}
-                      </span>
+                      <.icon
+                        name={
+                          if section_collapsed?(panel, @collapsed_sections),
+                            do: "hero-chevron-right-micro",
+                            else: "hero-chevron-down-micro"
+                        }
+                        class="size-4 text-[#cba6f7]"
+                      />
                     </button>
                   <% "stat" -> %>
                     <div class="sharp-corner bg-gradient-to-br from-[#cba6f7] via-[#89b4fa] to-[#94e2d5] p-4 text-[#11111b]">
