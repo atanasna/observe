@@ -5,29 +5,26 @@ metadata:
   folder: applications/queues
 
 queries:
-  queue:
+  queue_size:
+    description: Queue size by deployment, priority, and state.
     datasource: prometheus
     inputs:
-      deployment:
-        required: true
-      priority:
-        required: true
-      state:
-        required: true
+      deployment: {}
+      priority: {}
+      state: {}
     request:
       range: true
       interval: 1m
       query: max(app_queue_${inputs.priority}_${inputs.state}_size{deployment="${inputs.deployment}"}) by (deployment)
 
-  queue_job_execution_time:
+  queue_jobs_et:
+    description: Average execution time for processed queue jobs by deployment, tenant, priority, and job.
     datasource: prometheus
     inputs:
-      deployment:
-        required: true
-      tenant:
-        required: true
-      priority:
-        required: true
+      deployment: {}
+      tenant: {}
+      priority: {}
+      job: {}
     request:
       range: true
       interval: 1m

@@ -28,12 +28,12 @@ defmodule Observe.Docs do
       summary: "What Observe is and how the model differs from Grafana.",
       sections: [
         text(
-          "Observe is a YAML-provisioned observability dashboard system built around reusable query graphs. The key design rule is simple: panels consume datasets, while top-level queries produce datasets."
+          "Observe is a YAML-provisioned observability dashboard system built around reusable query templates and concrete datasets. The key design rule is simple: queries describe source requests, datasets hold executable data nodes, and panels consume datasets."
         ),
         bullets("Core ideas", [
-          "Queries are named top-level dashboard entities.",
-          "A source query fetches data from a datasource alias.",
-          "A derived query transforms the result of another query.",
+          "Queries are reusable source templates that can define inputs.",
+          "A source dataset instantiates a query template with concrete inputs.",
+          "A derived dataset transforms the result of another dataset.",
           "Panels reference datasets by name and never own source queries.",
           "Variables can resolve multiple datasource aliases from one selection."
         ]),
@@ -61,6 +61,12 @@ defmodule Observe.Docs do
             request:
               query: sum(rate(http_requests_total[5m])) by (service)
 
+        datasets:
+          request_rate:
+            source: query
+            query:
+              name: request_rate
+
         panels:
           - id: request-rate
             title: Request Rate
@@ -84,6 +90,10 @@ defmodule Observe.Docs do
         table("Provisioning paths", ["Path", "Purpose"], [
           ["config/datasources/**/*.yaml", "Provision physical datasource refs recursively."],
           ["config/datasources/**/*.yml", "Same as .yaml."],
+          ["config/queries/**/*.yaml", "Provision reusable source query templates recursively."],
+          ["config/queries/**/*.yml", "Same as .yaml."],
+          ["config/datasets/**/*.yaml", "Provision reusable dataset templates recursively."],
+          ["config/datasets/**/*.yml", "Same as .yaml."],
           ["config/dashboards/**/*.yaml", "Provision dashboards recursively."],
           ["config/dashboards/**/*.yml", "Same as .yaml."]
         ]),
@@ -94,7 +104,7 @@ defmodule Observe.Docs do
           ],
           [
             "YAML folder",
-            "Dashboards use metadata.folder. Datasource files use top-level metadata.folder, and individual datasource entries may override it with folder."
+            "Dashboards, query collections, and dataset collections use metadata.folder. Datasource files use top-level metadata.folder, and individual datasource entries may override it with folder."
           ],
           [
             "Filesystem fallback",
@@ -102,7 +112,7 @@ defmodule Observe.Docs do
           ],
           [
             "Root folder",
-            "Files without YAML folder metadata directly under config/dashboards or config/datasources are assigned folder root."
+            "Files without YAML folder metadata directly under a provisioning root are assigned folder root."
           ],
           [
             "Tree rendering",
@@ -111,7 +121,11 @@ defmodule Observe.Docs do
         ]),
         table("Shared top-level keys", ["Key", "Required", "Description"], [
           ["apiVersion", "Recommended", "Version marker. Current examples use observe/v1."],
-          ["kind", "Yes", "Document kind. Supported values are Datasources and Dashboard."]
+          [
+            "kind",
+            "Yes",
+            "Document kind. Supported values are Datasources, QueryCollection, DatasetCollection, and Dashboard."
+          ]
         ]),
         table("Dashboard top-level keys", ["Key", "Required", "Description"], [
           ["metadata", "Yes", "Dashboard identity and display metadata."],
@@ -125,7 +139,18 @@ defmodule Observe.Docs do
             "No",
             "Dashboard-local datasource aliases resolved to provisioned datasource refs."
           ],
-          ["queries", "Yes", "Named source and derived query definitions."],
+          ["queries", "Yes", "Named reusable source query definitions."],
+          [
+            "queryRefs",
+            "No",
+            "Legacy/direct-query refs. Dataset-backed dashboards infer query refs from dataset sources."
+          ],
+          [
+            "datasetRefs",
+            "No",
+            "Map of dashboard-local dataset names to provisioned dataset templates."
+          ],
+          ["datasets", "No", "Concrete source or derived datasets consumed by panels."],
           ["panels", "No", "Read-only visualization definitions referencing query datasets."]
         ]),
         callout(
@@ -470,20 +495,27 @@ defmodule Observe.Docs do
     %{
       slug: "queries",
       title: "Queries",
-      summary: "Source queries, derived queries, graph dependencies, and validation rules.",
+      summary:
+        "Source query templates, dataset derivation, graph dependencies, and validation rules.",
       sections: [
         text(
-          "Queries are first-class named nodes. A query produces a dataset. A dataset can feed panels or downstream derived queries."
+          "Queries are reusable source templates. Datasets turn those templates into executable source datasets, or derive new datasets from existing datasets with transforms."
         ),
         table("Source query options", ["Option", "Required", "Description"], [
+          ["description", "Yes", "Human-readable explanation of what the query returns."],
           ["datasource", "Yes", "Dashboard datasource alias to execute against."],
           ["request", "Yes", "Datasource-specific request payload."]
         ]),
-        table("Derived query options", ["Option", "Required", "Description"], [
-          ["from", "Yes", "Parent query name whose dataset should be transformed."],
+        table("Input schema options", ["Option", "Required", "Description"], [
+          ["inputs.name", "No", "Declares an input. Declared inputs are required by default."],
+          ["required", "No", "Set to false to make a declared input optional."],
+          ["default", "No", "Default value used when the caller omits the input."]
+        ]),
+        table("Derived dataset options", ["Option", "Required", "Description"], [
+          ["from", "Yes", "Parent dataset name whose data should be transformed."],
           ["transform", "No", "Ordered list of transforms applied to the parent dataset."]
         ]),
-        code("Source and derived query", """
+        code("Source query and derived dataset", """
         queries:
           cpu_raw:
             datasource: cloudwatch
@@ -493,8 +525,16 @@ defmodule Observe.Docs do
               period: 60
               stat: Average
 
+        datasets:
+          cpu_raw:
+            source: query
+            query:
+              name: cpu_raw
+
           high_cpu:
-            from: cpu_raw
+            source: dataset
+            dataset:
+              name: cpu_raw
             transform:
               - filter:
                   field: value
@@ -505,8 +545,7 @@ defmodule Observe.Docs do
         queries:
           check_metric:
             inputs:
-              target:
-                required: true
+              target: {}
             datasource: prometheus
             request:
               query: app_metric{target="${inputs.target}"}
@@ -524,38 +563,47 @@ defmodule Observe.Docs do
 
         datasets:
           check_panel_data:
-            query: check_metric
-            inputs:
-              target: ${vars.data.formats.check}
+            source: query
+            query:
+              name: check_metric
+              inputs:
+                target: ${vars.data.formats.check}
         """),
         code("Parameterized metric name from dataset inputs", """
         # Query collection
         queries:
           queue:
             inputs:
-              deployment:
-                required: true
-              priority:
-                required: true
-              state:
-                required: true
+              deployment: {}
+              priority: {}
+              state: {}
             datasource: prometheus
             request:
               range: true
               interval: 1m
               query: max(app_queue_${inputs.priority}_${inputs.state}_size{deployment="${inputs.deployment}"}) by (deployment)
 
-        # Dashboard
-        queryRefs:
-          - queue
-
+        # Dataset collection
         datasets:
+          queue_pending:
+            inputs:
+              deployment: {}
+              priority: {}
+            source: query
+            query:
+              name: queue
+              inputs:
+                deployment: ${inputs.deployment}
+                priority: ${inputs.priority}
+                state: pending
+
+        # Dashboard
+        datasetRefs:
           queue_high_pending:
-            query: queue
+            dataset: queue_pending
             inputs:
               deployment: ${vars.deployment}
               priority: high
-              state: pending
         """),
         callout(
           "Parameterized queries",
@@ -563,22 +611,22 @@ defmodule Observe.Docs do
         ),
         table("Validation rules", ["Rule", "Reason"], [
           [
-            "A query cannot mix datasource/request with from/transform.",
-            "Keeps source and derived query semantics explicit."
+            "A dataset source must be query or dataset.",
+            "Keeps source and derived dataset semantics explicit and excludes direct datasource access."
           ],
           [
             "A source query must reference a known datasource alias.",
             "Prevents runtime ambiguity."
           ],
           [
-            "A derived query must reference a known parent query.",
+            "A derived dataset must reference a known parent dataset.",
             "Ensures the graph can be planned."
           ],
           ["Cycles are rejected.", "Execution requires a directed acyclic graph."]
         ]),
         callout(
           "Performance intent",
-          "If multiple derived queries depend on the same source query, the source query should execute once and feed all derived datasets. The current planner builds this graph; real adapter caching is future work."
+          "If multiple derived datasets depend on the same source dataset, the source dataset executes once and feeds all derived datasets."
         )
       ]
     }
@@ -673,7 +721,7 @@ defmodule Observe.Docs do
           [
             "datasets",
             "Yes, unless dataset is set",
-            "List of query datasets to merge for this panel."
+            "List of query datasets to merge for this panel. Entries may be dataset names or maps with name and legend.format."
           ],
           [
             "stacked",
@@ -715,18 +763,20 @@ defmodule Observe.Docs do
 
         datasets:
           queue_default_pending:
-            query: queue
-            label: Default
-            inputs:
-              priority: default
-              state: pending
+            source: query
+            query:
+              name: queue
+              inputs:
+                priority: default
+                state: pending
 
           queue_low_pending:
-            query: queue
-            label: Low
-            inputs:
-              priority: low
-              state: pending
+            source: query
+            query:
+              name: queue
+              inputs:
+                priority: low
+                state: pending
 
         panels:
           - id: queue-pending
@@ -740,13 +790,19 @@ defmodule Observe.Docs do
               width: full
               height: 320
             datasets:
-              - queue_default_pending
-              - queue_low_pending
-              - queue_high_pending
+              - name: queue_default_pending
+                legend:
+                  format: Default
+              - name: queue_low_pending
+                legend:
+                  format: Low
+              - name: queue_high_pending
+                legend:
+                  format: High
         """),
         callout(
-          "Dataset labels",
-          "A dataset can define label to provide a stable display name for every row consumed from that dataset. Timeseries legends and tooltips prefer this label when present."
+          "Dataset legend formats",
+          "Legend formatting is panel-specific. Put legend.format on each panel dataset entry when a dataset needs a stable or custom series name in that panel."
         ),
         table("Panel types", ["Type", "Current behavior"], [
           ["table", "Renders rows and columns from the dataset."],
@@ -770,7 +826,7 @@ defmodule Observe.Docs do
           ["stat", "Any row list; currently renders row count."],
           ["row", "No dataset required."]
         ]),
-        callout("Validation rule", "Every panel dataset must reference an existing query name.")
+        callout("Validation rule", "Every panel dataset must reference an existing dataset name.")
       ]
     }
   end
@@ -789,9 +845,9 @@ defmodule Observe.Docs do
           "Load dashboard YAML files.",
           "Resolve default variable values.",
           "Interpolate datasource refs such as ${vars.region}-p.",
-          "Validate source and derived query shapes.",
+          "Validate source queries and derived dataset shapes.",
           "Validate panel dataset references.",
-          "Detect query graph cycles.",
+          "Detect dataset graph cycles.",
           "Build execution order.",
           "Execute source queries and transforms.",
           "Render panels from datasets."
@@ -869,8 +925,16 @@ defmodule Observe.Docs do
               query:
                 match_all: {}
 
+        datasets:
+          logs_raw:
+            source: query
+            query:
+              name: logs_raw
+
           error_logs:
-            from: logs_raw
+            source: dataset
+            dataset:
+              name: logs_raw
             transform:
               - filter:
                   field: status

@@ -867,21 +867,23 @@ defmodule ObserveWeb.DashboardShowLive do
   end
 
   defp columns([]), do: []
-  defp columns([row | _]), do: Map.keys(row)
+  defp columns([row | _]), do: row |> Map.drop(["legend_format"]) |> Map.keys()
 
   defp panel_rows(%{"datasets" => panel_datasets}, datasets, dashboard)
        when is_list(panel_datasets) do
-    Enum.flat_map(panel_datasets, fn dataset ->
+    Enum.flat_map(panel_datasets, fn panel_dataset ->
+      dataset = panel_dataset_name(panel_dataset)
+
       datasets
       |> Map.get(dataset, [])
-      |> Enum.map(&put_dataset_metadata(&1, dataset, dashboard))
+      |> Enum.map(&put_dataset_metadata(&1, dataset, panel_dataset, dashboard))
     end)
   end
 
   defp panel_rows(%{"dataset" => dataset}, datasets, dashboard) do
     datasets
     |> Map.get(dataset, [])
-    |> Enum.map(&put_dataset_metadata(&1, dataset, dashboard))
+    |> Enum.map(&put_dataset_metadata(&1, dataset, dataset, dashboard))
   end
 
   defp panel_rows(_panel, _datasets, _dashboard), do: []
@@ -979,7 +981,7 @@ defmodule ObserveWeb.DashboardShowLive do
 
   defp panel_loading?(%{"datasets" => panel_datasets}, datasets, true)
        when is_list(panel_datasets),
-       do: Enum.any?(panel_datasets, &(not Map.has_key?(datasets, &1)))
+       do: Enum.any?(panel_datasets, &(not Map.has_key?(datasets, panel_dataset_name(&1))))
 
   defp panel_loading?(%{"dataset" => dataset}, datasets, true),
     do: not Map.has_key?(datasets, dataset)
@@ -993,37 +995,36 @@ defmodule ObserveWeb.DashboardShowLive do
     end
   end
 
-  defp put_dataset_metadata(row, dataset, dashboard) do
-    dataset_config = get_in(dashboard, ["datasets", dataset]) || %{}
-
+  defp put_dataset_metadata(row, dataset, panel_dataset, _dashboard) do
     row
     |> Map.put("dataset", dataset)
-    |> maybe_put_dataset_label(Map.get(dataset_config, "label"))
+    |> maybe_put_legend_format(panel_dataset_legend_format(panel_dataset))
   end
 
-  defp maybe_put_dataset_label(row, label) when is_binary(label) and label != "",
-    do: Map.put(row, "dataset_label", label)
+  defp panel_dataset_name(dataset) when is_binary(dataset), do: dataset
+  defp panel_dataset_name(%{"name" => dataset}) when is_binary(dataset), do: dataset
+  defp panel_dataset_name(_dataset), do: nil
 
-  defp maybe_put_dataset_label(row, _label), do: row
+  defp panel_dataset_legend_format(%{"legend" => %{"format" => format}}), do: format
+  defp panel_dataset_legend_format(_dataset), do: nil
+
+  defp maybe_put_legend_format(row, format) when is_binary(format) and format != "",
+    do: Map.put(row, "legend_format", format)
+
+  defp maybe_put_legend_format(row, _format), do: row
 
   defp format_cell(value) when is_binary(value), do: value
   defp format_cell(value) when is_float(value), do: :erlang.float_to_binary(value, decimals: 2)
   defp format_cell(value), do: inspect(value)
 
   defp series_label(row) do
-    case Map.get(row, "dataset_label") do
-      label when is_binary(label) and label != "" ->
-        label
-
-      _label ->
-        row
-        |> Map.drop(["time", "value", "raw_value", "dataset_label"])
-        |> Enum.map(fn {key, value} -> "#{key}=#{value}" end)
-        |> Enum.join(" ")
-        |> case do
-          "" -> "series"
-          label -> label
-        end
+    row
+    |> Map.drop(["time", "value", "raw_value", "legend_format"])
+    |> Enum.map(fn {key, value} -> "#{key}=#{value}" end)
+    |> Enum.join(" ")
+    |> case do
+      "" -> "series"
+      label -> label
     end
   end
 
@@ -1082,15 +1083,12 @@ defmodule ObserveWeb.DashboardShowLive do
     |> Enum.map(fn label -> {label, groups[label] |> Enum.reverse()} end)
   end
 
-  defp series_label(row, panel) do
-    case legend_format(panel) do
+  defp series_label(row, _panel) do
+    case Map.get(row, "legend_format") do
       format when is_binary(format) and format != "" -> render_legend_format(format, row)
       _format -> series_label(row)
     end
   end
-
-  defp legend_format(%{"legend" => %{"format" => format}}), do: format
-  defp legend_format(_panel), do: nil
 
   defp render_legend_format(format, row) do
     Regex.replace(~r/\{\{\s*([^}\s]+)\s*\}\}/, format, fn _match, key ->

@@ -55,43 +55,167 @@ defmodule Observe.QueryGraph do
       if not is_map(dataset) do
         {:halt, {:error, "dataset #{dataset_name} must be a map"}}
       else
-        query_ref = Map.get(dataset, "query")
-
         cond do
-          not is_binary(query_ref) or query_ref == "" ->
-            {:halt, {:error, "dataset #{dataset_name} must define query"}}
+          Map.has_key?(dataset, "source") ->
+            expand_sourced_dataset(dataset_name, dataset, query_templates, vars, acc)
 
-          not Map.has_key?(query_templates, query_ref) ->
-            {:halt,
-             {:error, "dataset #{dataset_name} references unknown query #{inspect(query_ref)}"}}
+          Map.has_key?(dataset, "query") and derived_dataset?(dataset) ->
+            {:halt, {:error, "dataset #{dataset_name} cannot mix query with from/transform"}}
+
+          Map.has_key?(dataset, "query") ->
+            expand_source_dataset(dataset_name, dataset, query_templates, vars, acc)
+
+          derived_dataset?(dataset) ->
+            expand_derived_dataset(dataset_name, dataset, vars, acc)
 
           true ->
-            template = Map.fetch!(query_templates, query_ref)
-
-            with {:ok, inputs} <-
-                   query_inputs(query_ref, template, Map.get(dataset, "inputs", %{}), vars) do
-              query =
-                template
-                |> Map.drop(["inputs"])
-                |> Variables.interpolate(vars, inputs)
-                |> Map.put("query_ref", query_ref)
-                |> Map.put("inputs", inputs)
-
-              {:cont, {:ok, Map.put(acc, dataset_name, query)}}
-            else
-              {:error, reason} -> {:halt, {:error, "dataset #{dataset_name}: #{reason}"}}
-            end
+            {:halt, {:error, "dataset #{dataset_name} must define query or from/transform"}}
         end
       end
     end)
   end
 
-  defp query_inputs(query_ref, query, provided_inputs, vars) do
-    input_schema = Map.get(query, "inputs", %{})
+  defp expand_sourced_dataset(dataset_name, dataset, query_templates, vars, acc) do
+    case Map.get(dataset, "source") do
+      "query" ->
+        expand_query_sourced_dataset(dataset_name, dataset, query_templates, vars, acc)
+
+      "dataset" ->
+        expand_dataset_sourced_dataset(dataset_name, dataset, vars, acc)
+
+      source ->
+        {:halt, {:error, "dataset #{dataset_name} has unsupported source #{inspect(source)}"}}
+    end
+  end
+
+  defp expand_query_sourced_dataset(dataset_name, dataset, query_templates, vars, acc) do
+    with {:ok, dataset_inputs} <- dataset_inputs(dataset_name, dataset, vars),
+         {:ok, query_ref, provided_inputs} <-
+           source_query(dataset_name, dataset, vars, dataset_inputs) do
+      expand_source_dataset(
+        dataset_name,
+        %{"query" => query_ref, "inputs" => provided_inputs},
+        query_templates,
+        vars,
+        acc
+      )
+    else
+      {:error, reason} -> {:halt, {:error, reason}}
+    end
+  end
+
+  defp expand_dataset_sourced_dataset(dataset_name, dataset, vars, acc) do
+    with {:ok, dataset_inputs} <- dataset_inputs(dataset_name, dataset, vars),
+         {:ok, from} <- source_dataset(dataset_name, dataset, vars, dataset_inputs) do
+      query =
+        dataset
+        |> Variables.interpolate(vars, dataset_inputs)
+        |> Map.take(["transform"])
+        |> Map.put("from", from)
+        |> Map.put("kind", "derived")
+
+      {:cont, {:ok, Map.put(acc, dataset_name, query)}}
+    else
+      {:error, reason} -> {:halt, {:error, reason}}
+    end
+  end
+
+  defp source_query(dataset_name, dataset, vars, dataset_inputs) do
+    query = dataset |> Map.get("query", %{}) |> Variables.interpolate(vars, dataset_inputs)
+    query_ref = Map.get(query, "name")
 
     cond do
+      not is_binary(query_ref) or query_ref == "" ->
+        {:error, "dataset #{dataset_name} source query must define name"}
+
+      not is_map(Map.get(query, "inputs", %{})) ->
+        {:error, "dataset #{dataset_name} source query inputs must be a map"}
+
+      true ->
+        {:ok, query_ref, Map.get(query, "inputs", %{})}
+    end
+  end
+
+  defp source_dataset(dataset_name, dataset, vars, dataset_inputs) do
+    source = dataset |> Map.get("dataset", %{}) |> Variables.interpolate(vars, dataset_inputs)
+    name = Map.get(source, "name")
+
+    if is_binary(name) and name != "" do
+      {:ok, name}
+    else
+      {:error, "dataset #{dataset_name} source dataset must define name"}
+    end
+  end
+
+  defp dataset_inputs(dataset_name, dataset, vars) do
+    input_schema = Map.get(dataset, "_input_schema", %{})
+    provided_inputs = Map.get(dataset, "inputs", %{})
+
+    input_values("dataset", dataset_name, input_schema, provided_inputs, vars)
+  end
+
+  defp expand_source_dataset(dataset_name, dataset, query_templates, vars, acc) do
+    query_ref = Map.get(dataset, "query")
+
+    cond do
+      not is_binary(query_ref) or query_ref == "" ->
+        {:halt, {:error, "dataset #{dataset_name} must define query"}}
+
+      not Map.has_key?(query_templates, query_ref) ->
+        {:halt,
+         {:error, "dataset #{dataset_name} references unknown query #{inspect(query_ref)}"}}
+
+      true ->
+        template = Map.fetch!(query_templates, query_ref)
+
+        if derived_dataset?(template) do
+          {:halt, {:error, "dataset #{dataset_name} references derived query #{query_ref}"}}
+        else
+          with {:ok, inputs} <-
+                 query_inputs(query_ref, template, Map.get(dataset, "inputs", %{}), vars) do
+            query =
+              template
+              |> Map.drop(["inputs"])
+              |> Variables.interpolate(vars, inputs)
+              |> Map.put("query_ref", query_ref)
+              |> Map.put("inputs", inputs)
+
+            {:cont, {:ok, Map.put(acc, dataset_name, query)}}
+          else
+            {:error, reason} -> {:halt, {:error, "dataset #{dataset_name}: #{reason}"}}
+          end
+        end
+    end
+  end
+
+  defp expand_derived_dataset(dataset_name, dataset, vars, acc) do
+    query = Variables.interpolate(dataset, vars)
+    from = Map.get(query, "from")
+
+    if is_binary(from) and from != "" do
+      query =
+        query
+        |> Map.take(["from", "transform"])
+        |> Map.put("kind", "derived")
+
+      {:cont, {:ok, Map.put(acc, dataset_name, query)}}
+    else
+      {:halt, {:error, "derived dataset #{dataset_name} must define from"}}
+    end
+  end
+
+  defp derived_dataset?(query) do
+    Map.has_key?(query, "from") or Map.has_key?(query, "transform")
+  end
+
+  defp query_inputs(query_ref, query, provided_inputs, vars) do
+    input_values("query", query_ref, Map.get(query, "inputs", %{}), provided_inputs, vars)
+  end
+
+  defp input_values(type, name, input_schema, provided_inputs, vars) do
+    cond do
       not is_map(input_schema) ->
-        {:error, "query #{query_ref} inputs must be a map"}
+        {:error, "#{type} #{name} inputs must be a map"}
 
       not is_map(provided_inputs) ->
         {:error, "inputs must be a map"}
@@ -107,16 +231,28 @@ defmodule Observe.QueryGraph do
           |> Map.merge(provided_inputs)
           |> Variables.interpolate(vars)
 
-        case missing_required_input(input_schema, inputs) do
-          nil -> {:ok, inputs}
-          name -> {:error, "query #{query_ref} missing required input #{name}"}
+        cond do
+          input_name = unknown_input(input_schema, provided_inputs) ->
+            {:error, "#{type} #{name} received unknown input #{input_name}"}
+
+          input_name = missing_required_input(input_schema, inputs) ->
+            {:error, "#{type} #{name} missing required input #{input_name}"}
+
+          true ->
+            {:ok, inputs}
         end
     end
   end
 
+  defp unknown_input(input_schema, inputs) do
+    Enum.find_value(inputs, fn {name, _value} ->
+      if Map.has_key?(input_schema, name), do: nil, else: name
+    end)
+  end
+
   defp missing_required_input(input_schema, inputs) do
     Enum.find_value(input_schema, fn {name, spec} ->
-      required? = is_map(spec) and Map.get(spec, "required") == true
+      required? = not (is_map(spec) and Map.get(spec, "required") == false)
       value = Map.get(inputs, name)
 
       if required? and (is_nil(value) or value == ""), do: name
@@ -168,7 +304,7 @@ defmodule Observe.QueryGraph do
           if is_binary(from) do
             {:cont, {:ok, Map.put(acc, name, Map.put(query, "kind", "derived"))}}
           else
-            {:halt, {:error, "derived query #{name} must define from"}}
+            {:halt, {:error, "derived dataset #{name} must define from"}}
           end
 
         true ->
@@ -190,7 +326,14 @@ defmodule Observe.QueryGraph do
     end
   end
 
-  defp panel_datasets(%{"datasets" => datasets}) when is_list(datasets), do: datasets
+  defp panel_datasets(%{"datasets" => datasets}) when is_list(datasets) do
+    Enum.map(datasets, fn
+      dataset when is_binary(dataset) -> dataset
+      %{"name" => dataset} when is_binary(dataset) -> dataset
+      _dataset -> nil
+    end)
+  end
+
   defp panel_datasets(%{"dataset" => dataset}), do: [dataset]
   defp panel_datasets(_panel), do: [nil]
 

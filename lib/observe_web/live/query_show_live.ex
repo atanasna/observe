@@ -36,7 +36,7 @@ defmodule ObserveWeb.QueryShowLive do
                 {@name}
               </h1>
               <p class="mocha-muted mt-4 max-w-2xl text-lg leading-8">
-                First-class reusable query definition loaded from provisioning YAML.
+                {query_description(@query)}
               </p>
             </div>
             <div class="border border-[#f9e2af]/20 bg-[#f9e2af]/10 p-4">
@@ -102,6 +102,13 @@ defmodule ObserveWeb.QueryShowLive do
       true -> "unknown"
     end
   end
+
+  defp query_description(%{"description" => description})
+       when is_binary(description) and description != "",
+       do: description
+
+  defp query_description(_query),
+    do: "First-class reusable query definition loaded from provisioning YAML."
 
   defp format_value(value) when is_binary(value), do: value
   defp format_value(value), do: inspect(value, pretty: true, limit: :infinity)

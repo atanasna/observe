@@ -94,8 +94,11 @@ defmodule Observe.Store do
 
   defp load_state do
     case Provisioning.load() do
-      {:ok, state} -> state
-      {:error, reason} -> %{datasources: %{}, queries: %{}, dashboards: %{}, error: reason}
+      {:ok, state} ->
+        state
+
+      {:error, reason} ->
+        %{datasources: %{}, queries: %{}, datasets: %{}, dashboards: %{}, error: reason}
     end
   end
 

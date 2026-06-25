@@ -51,7 +51,7 @@ defmodule Observe.PanelCompatibility do
 
   defp has_label?(row) do
     row
-    |> Map.drop(["time", "value", "raw_value"])
+    |> Map.drop(["time", "value", "raw_value", "legend_format"])
     |> map_size()
     |> Kernel.>(0)
   end

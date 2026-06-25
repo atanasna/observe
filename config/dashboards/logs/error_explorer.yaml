@@ -22,18 +22,27 @@ datasources:
 
 queryRefs:
   - logs_raw
-  - errors
-  - server_errors
 
 datasets:
   logs_raw:
     query: logs_raw
 
   errors:
-    query: errors
+    from: logs_raw
+    transform:
+      - filter:
+          field: level
+          eq: error
+      - select:
+          fields: [timestamp, service, status, message]
 
   server_errors:
-    query: server_errors
+    from: errors
+    transform:
+      - filter:
+          field: status
+          gte: 500
+      - limit: 50
 
 panels:
   - id: error-count

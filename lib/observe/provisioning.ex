@@ -1,6 +1,6 @@
 defmodule Observe.Provisioning do
   @moduledoc """
-  Loads YAML-provisioned datasources, queries, and dashboards.
+  Loads YAML-provisioned datasources, queries, datasets, and dashboards.
   """
 
   alias Observe.QueryGraph
@@ -8,13 +8,16 @@ defmodule Observe.Provisioning do
 
   @datasource_dir Path.expand("../../config/datasources", __DIR__)
   @query_dir Path.expand("../../config/queries", __DIR__)
+  @dataset_dir Path.expand("../../config/datasets", __DIR__)
   @dashboard_dir Path.expand("../../config/dashboards", __DIR__)
 
   def load do
     with {:ok, datasources} <- load_datasources(),
          {:ok, queries} <- load_queries(),
-         {:ok, dashboards} <- load_dashboards(datasources, queries) do
-      {:ok, %{datasources: datasources, queries: queries, dashboards: dashboards}}
+         {:ok, datasets} <- load_datasets(),
+         {:ok, dashboards} <- load_dashboards(datasources, queries, datasets) do
+      {:ok,
+       %{datasources: datasources, queries: queries, datasets: datasets, dashboards: dashboards}}
     end
   end
 
@@ -67,14 +70,39 @@ defmodule Observe.Provisioning do
     end)
   end
 
-  def load_dashboards(datasources, queries \\ %{}, dir \\ @dashboard_dir) do
+  def load_datasets(dir \\ @dataset_dir) do
+    dir
+    |> yaml_files()
+    |> Enum.reduce_while({:ok, %{}}, fn path, {:ok, acc} ->
+      case read_yaml(path) do
+        {:ok, %{"datasets" => datasets} = document} when is_map(datasets) ->
+          document_folder = get_in(document, ["metadata", "folder"])
+
+          datasets =
+            Map.new(datasets, fn {name, dataset} ->
+              {name, put_metadata(dataset, dir, path, document_folder)}
+            end)
+
+          {:cont, {:ok, Map.merge(acc, datasets)}}
+
+        {:ok, _} ->
+          {:halt, {:error, "#{path} must contain a datasets map"}}
+
+        {:error, reason} ->
+          {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  def load_dashboards(datasources, queries \\ %{}, datasets \\ %{}, dir \\ @dashboard_dir) do
     dir
     |> yaml_files()
     |> Enum.reduce_while({:ok, %{}}, fn path, {:ok, acc} ->
       case read_yaml(path) do
         {:ok, dashboard} ->
           with {:ok, normalized} <- normalize_dashboard(dashboard, path),
-               {:ok, resolved} <- resolve_dashboard_queries(normalized, queries),
+               {:ok, resolved} <- resolve_dashboard_datasets(normalized, datasets),
+               {:ok, resolved} <- resolve_dashboard_queries(resolved, queries),
                {:ok, plan} <- QueryGraph.plan(resolved, datasources) do
             name = get_in(resolved, ["metadata", "name"])
 
@@ -107,6 +135,9 @@ defmodule Observe.Provisioning do
       not is_list(Map.get(dashboard, "queryRefs", [])) ->
         {:error, "dashboard queryRefs must be a list"}
 
+      not is_map(Map.get(dashboard, "datasetRefs", %{})) ->
+        {:error, "dashboard datasetRefs must be a map"}
+
       not is_map(Map.get(dashboard, "datasets", %{})) ->
         {:error, "dashboard datasets must be a map"}
 
@@ -120,6 +151,7 @@ defmodule Observe.Provisioning do
          |> Map.put_new("variables", %{})
          |> Map.put_new("datasources", %{})
          |> Map.put_new("queryRefs", [])
+         |> Map.put_new("datasetRefs", %{})
          |> Map.put_new("queries", %{})
          |> Map.put_new("datasets", %{})
          |> Map.put_new("panels", [])}
@@ -129,14 +161,57 @@ defmodule Observe.Provisioning do
   defp normalize_dashboard(_dashboard, _path), do: {:error, "kind must be Dashboard"}
 
   defp resolve_dashboard_queries(dashboard, provisioned_queries) do
+    query_refs =
+      dashboard
+      |> Map.get("queryRefs", [])
+      |> Enum.concat(inferred_query_refs(Map.get(dashboard, "datasets", %{})))
+      |> Enum.uniq()
+
     with {:ok, referenced_queries} <-
-           referenced_queries(Map.get(dashboard, "queryRefs", []), provisioned_queries) do
+           referenced_queries(query_refs, provisioned_queries) do
       {:ok,
        Map.put(
          dashboard,
          "queries",
          Map.merge(referenced_queries, Map.get(dashboard, "queries", %{}))
        )}
+    end
+  end
+
+  defp inferred_query_refs(datasets) do
+    datasets
+    |> Enum.flat_map(fn {name, dataset} ->
+      inferred_query_refs(name, dataset, datasets, MapSet.new())
+    end)
+  end
+
+  defp inferred_query_refs(name, dataset, datasets, seen) do
+    if MapSet.member?(seen, name) do
+      []
+    else
+      seen = MapSet.put(seen, name)
+
+      cond do
+        Map.get(dataset, "source") == "query" ->
+          case get_in(dataset, ["query", "name"]) do
+            query_name when is_binary(query_name) and query_name != "" -> [query_name]
+            _query_name -> []
+          end
+
+        Map.get(dataset, "source") == "dataset" ->
+          parent_name = get_in(dataset, ["dataset", "name"])
+
+          case Map.get(datasets, parent_name) do
+            %{} = parent -> inferred_query_refs(parent_name, parent, datasets, seen)
+            _parent -> []
+          end
+
+        is_binary(Map.get(dataset, "query")) ->
+          [Map.get(dataset, "query")]
+
+        true ->
+          []
+      end
     end
   end
 
@@ -150,6 +225,49 @@ defmodule Observe.Provisioning do
           {:halt, {:error, "dashboard references unknown query #{inspect(name)}"}}
       end
     end)
+  end
+
+  defp resolve_dashboard_datasets(dashboard, provisioned_datasets) do
+    with {:ok, referenced_datasets} <-
+           referenced_datasets(Map.get(dashboard, "datasetRefs", %{}), provisioned_datasets) do
+      {:ok,
+       Map.put(
+         dashboard,
+         "datasets",
+         Map.merge(referenced_datasets, Map.get(dashboard, "datasets", %{}))
+       )}
+    end
+  end
+
+  defp referenced_datasets(dataset_refs, provisioned_datasets) do
+    Enum.reduce_while(dataset_refs, {:ok, %{}}, fn {name, ref}, {:ok, acc} ->
+      with {:ok, dataset_name, inputs} <- dataset_ref(name, ref),
+           {:ok, dataset} <- fetch_dataset(dataset_name, provisioned_datasets) do
+        dataset =
+          dataset
+          |> Map.drop(["_meta"])
+          |> Map.put("_dataset_ref", dataset_name)
+          |> Map.put("_input_schema", Map.get(dataset, "inputs", %{}))
+          |> Map.put("inputs", inputs)
+
+        {:cont, {:ok, Map.put(acc, name, dataset)}}
+      else
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp dataset_ref(_name, %{"dataset" => dataset_name} = ref) when is_binary(dataset_name) do
+    {:ok, dataset_name, Map.get(ref, "inputs", %{})}
+  end
+
+  defp dataset_ref(name, _ref), do: {:error, "datasetRef #{name} must define dataset"}
+
+  defp fetch_dataset(name, provisioned_datasets) do
+    case Map.fetch(provisioned_datasets, name) do
+      {:ok, dataset} -> {:ok, dataset}
+      :error -> {:error, "dashboard references unknown dataset #{inspect(name)}"}
+    end
   end
 
   defp yaml_files(dir), do: dir |> do_yaml_files() |> Enum.sort()

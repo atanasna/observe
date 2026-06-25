@@ -177,7 +177,7 @@ defmodule Observe.Executor do
 
   defp series_key(row) do
     row
-    |> Map.drop(["time", "value", "raw_value", "dataset", "dataset_label"])
+    |> Map.drop(["time", "value", "raw_value", "dataset", "legend_format"])
   end
 
   defp source_dataset(name, query, plan, opts) do

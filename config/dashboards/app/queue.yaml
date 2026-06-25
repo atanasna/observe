@@ -47,107 +47,64 @@ datasources:
 layout:
   columns: 16
 
-queryRefs:
-  - queue
-  - queue_job_execution_time
-
-datasets:
+datasetRefs:
   # Pending Jobs
   queue_low_pending:
-    query: queue
-    label: Low
+    dataset: queue_low_pending
     inputs:
       deployment: ${vars.deployment}
-      state: "pending"
-      priority: "low"
   queue_default_pending:
-    query: queue
-    label: Default
+    dataset: queue_default_pending
     inputs:
       deployment: ${vars.deployment}
-      state: "pending"
-      priority: "default"
   queue_high_pending:
-    query: queue
-    label: High
+    dataset: queue_high_pending
     inputs:
       deployment: ${vars.deployment}
-      state: "pending"
-      priority: "high"
   queue_bulk_pending:
-    query: queue
-    label: Bulk
+    dataset: queue_bulk_pending
     inputs:
       deployment: ${vars.deployment}
-      state: "pending"
-      priority: "bulk"
   # Running Jobs
   queue_low_running:
-    query: queue
-    label: Low
+    dataset: queue_low_running
     inputs:
       deployment: ${vars.deployment}
-      state: "running"
-      priority: "low"
   queue_default_running:
-    query: queue
-    label: Default
+    dataset: queue_default_running
     inputs:
       deployment: ${vars.deployment}
-      state: "running"
-      priority: "default"
   queue_high_running:
-    query: queue
-    label: High
+    dataset: queue_high_running
     inputs:
       deployment: ${vars.deployment}
-      state: "running"
-      priority: "high"
   queue_bulk_running:
-    query: queue
-    label: Bulk
+    dataset: queue_bulk_running
     inputs:
       deployment: ${vars.deployment}
-      state: "running"
-      priority: "bulk"
   # Delayed Jobs
   queue_low_delayed:
-    query: queue
-    label: Low
+    dataset: queue_low_delayed
     inputs:
       deployment: ${vars.deployment}
-      state: "delayed"
-      priority: "low"
   queue_default_delayed:
-    query: queue
-    label: Default
+    dataset: queue_default_delayed
     inputs:
       deployment: ${vars.deployment}
-      state: "delayed"
-      priority: "default"
   queue_high_delayed:
-    query: queue
-    label: High
+    dataset: queue_high_delayed
     inputs:
       deployment: ${vars.deployment}
-      state: "delayed"
-      priority: "high"
   queue_bulk_delayed:
-    query: queue
-    label: Bulk
+    dataset: queue_bulk_delayed
     inputs:
       deployment: ${vars.deployment}
-      state: "delayed"
-      priority: "bulk"
-  queue_default_execution_time:
-    query: queue_job_execution_time
-    no_value: 0
-    fill_missing: 0
+  queue_default_jobs_et:
+    dataset: queue_default_jobs_et
     inputs:
       deployment: ${vars.deployment}
       tenant: ${vars.tenant}
       job: ${vars.job}
-      priority: "default"
 
 panels:
   - id: pending
@@ -161,10 +118,18 @@ panels:
       width: full
       height: 300
     datasets:
-      - queue_high_pending
-      - queue_default_pending
-      - queue_low_pending
-      - queue_bulk_pending
+      - name: queue_high_pending
+        legend:
+          format: High
+      - name: queue_default_pending
+        legend:
+          format: Default
+      - name: queue_low_pending
+        legend:
+          format: Low
+      - name: queue_bulk_pending
+        legend:
+          format: Bulk
   - id: running
     title: Running
     description: Running queue size by priority for the selected deployment.
@@ -176,10 +141,18 @@ panels:
       width: 8
       height: 240
     datasets:
-      - queue_high_running
-      - queue_default_running
-      - queue_low_running
-      - queue_bulk_running
+      - name: queue_high_running
+        legend:
+          format: High
+      - name: queue_default_running
+        legend:
+          format: Default
+      - name: queue_low_running
+        legend:
+          format: Low
+      - name: queue_bulk_running
+        legend:
+          format: Bulk
   - id: delayed
     description: Delayed queue size by priority for the selected deployment.
     title: Delayed
@@ -191,10 +164,18 @@ panels:
       width: 8
       height: 240
     datasets:
-      - queue_high_delayed
-      - queue_default_delayed
-      - queue_low_delayed
-      - queue_bulk_delayed
+      - name: queue_high_delayed
+        legend:
+          format: High
+      - name: queue_default_delayed
+        legend:
+          format: Default
+      - name: queue_low_delayed
+        legend:
+          format: Low
+      - name: queue_bulk_delayed
+        legend:
+          format: Bulk
 
   - id: experimental
     title: Experimental
@@ -207,8 +188,10 @@ panels:
     type: timeseries
     legend:
       position: right
-      format: "{{tenant}} - {{priority}} - {{exported_job}}"
     layout:
       width: 8
       height: 300 
-    dataset: queue_default_execution_time
+    datasets:
+      - name: queue_default_jobs_et
+        legend:
+          format: "{{tenant}} - {{priority}} - {{exported_job}}"

@@ -171,13 +171,27 @@ defmodule ObserveWeb.QueryIndexLive do
     end
   end
 
-  defp query_summary(%{"datasource" => datasource, "request" => request}) do
-    request_query = get_in(request, ["query"])
-    if is_binary(request_query), do: "#{datasource}: #{request_query}", else: datasource
+  defp query_summary(%{"datasource" => datasource, "request" => request} = query) do
+    case query_description(query) do
+      description when is_binary(description) ->
+        description
+
+      _description ->
+        case Map.get(request, "query") do
+          request_query when is_binary(request_query) -> "#{datasource}: #{request_query}"
+          _request_query -> datasource
+        end
+    end
   end
 
   defp query_summary(%{"from" => from}), do: "from #{from}"
   defp query_summary(_query), do: "-"
+
+  defp query_description(%{"description" => description})
+       when is_binary(description) and description != "",
+       do: description
+
+  defp query_description(_query), do: nil
 
   defp visible_rows(rows, collapsed_folders, leaf_kind) do
     Enum.reject(rows, &hidden_by_collapsed_folder?(&1, collapsed_folders, leaf_kind))

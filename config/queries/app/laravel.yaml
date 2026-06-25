@@ -6,13 +6,11 @@ metadata:
 
 queries:
   roaming_outbound_requests_2xx:
+    description: Laravel roaming outbound request count for 2xx HTTP responses.
     inputs:
-      deployment:
-        required: true
-      tenant:
-        required: true
-      roaming_sample_type:
-        required: true
+      deployment: {}
+      tenant: {}
+      roaming_sample_type: {}
     datasource: prometheus
     request:
       range: true
