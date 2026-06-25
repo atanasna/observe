@@ -3,7 +3,6 @@ import * as d3 from "d3"
 const colors = ["#89b4fa", "#cba6f7", "#f5c2e7", "#94e2d5", "#a6e3a1", "#f9e2af", "#fab387", "#f38ba8"]
 const zoomChangedEvent = "observe:timeseries-zoom-changed"
 let globalZoomDomain = null
-let resetButton = null
 
 export const D3Timeseries = {
   mounted() {
@@ -13,7 +12,6 @@ export const D3Timeseries = {
     this.fullscreenChanged = () => this.scheduleRender()
     window.addEventListener(zoomChangedEvent, this.zoomChanged)
     document.addEventListener("fullscreenchange", this.fullscreenChanged)
-    bindGlobalResetButton()
     this.resizeObserver = new ResizeObserver(() => this.scheduleRender())
     this.resizeObserver.observe(this.el)
     this.render()
@@ -58,6 +56,19 @@ export const D3Timeseries = {
 
     const controls = document.createElement("div")
     controls.className = "mb-2 flex items-center justify-end gap-1.5"
+
+    const resetZoomButton = iconButton({
+      label: "Reset zoom",
+      className: globalZoomDomain
+        ? "border-[#fab387]/35 text-[#fab387] hover:border-[#f5c2e7]/45 hover:text-[#f5c2e7]"
+        : "border-[#b4befe]/20 text-[#6c7086]",
+      icon: resetZoomIcon()
+    })
+    resetZoomButton.disabled = !globalZoomDomain
+    resetZoomButton.classList.toggle("cursor-not-allowed", !globalZoomDomain)
+    resetZoomButton.classList.toggle("opacity-45", !globalZoomDomain)
+    resetZoomButton.addEventListener("click", () => setGlobalZoomDomain(null))
+    controls.appendChild(resetZoomButton)
 
     const legendButton = iconButton({
       label: this.legendVisible ? "Hide legend" : "Show legend",
@@ -384,7 +395,7 @@ function chartBodyClass(position) {
 
 function legendClass(position) {
   if (position === "left" || position === "right") {
-    return "grid max-h-40 gap-1.5 overflow-auto text-xs md:shrink-0 md:grid-cols-1"
+    return "grid max-h-40 content-start items-start gap-0.5 overflow-auto text-xs md:shrink-0 md:grid-cols-1"
   }
 
   return "flex max-h-20 flex-wrap items-center gap-1.5 overflow-auto text-xs"
@@ -403,16 +414,6 @@ function textWidth(value) {
   context.font = "600 12px ui-sans-serif, system-ui, sans-serif"
 
   return context.measureText(String(value)).width
-}
-
-function bindGlobalResetButton() {
-  const button = document.getElementById("reset-timeseries-zoom")
-  if (button === resetButton) return
-  if (!button) return
-
-  resetButton = button
-  button.addEventListener("click", () => setGlobalZoomDomain(null))
-  syncResetButton()
 }
 
 function iconButton({label, className, icon}) {
@@ -437,17 +438,13 @@ function legendIcon() {
   return `<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" class="size-4"><path d="M4 5.25A1.25 1.25 0 1 1 1.5 5.25 1.25 1.25 0 0 1 4 5.25ZM6.25 4.5a.75.75 0 0 0 0 1.5h11.5a.75.75 0 0 0 0-1.5H6.25ZM6.25 9.25a.75.75 0 0 0 0 1.5h11.5a.75.75 0 0 0 0-1.5H6.25ZM5.5 14.75a.75.75 0 0 1 .75-.75h11.5a.75.75 0 0 1 0 1.5H6.25a.75.75 0 0 1-.75-.75ZM2.75 11.25a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5ZM4 14.75a1.25 1.25 0 1 1-2.5 0 1.25 1.25 0 0 1 2.5 0Z" /></svg>`
 }
 
-function setGlobalZoomDomain(domain) {
-  globalZoomDomain = domain
-  syncResetButton()
-  window.dispatchEvent(new CustomEvent(zoomChangedEvent, {detail: {domain}}))
+function resetZoomIcon() {
+  return `<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" class="size-4"><path fill-rule="evenodd" d="M15.312 11.424a5.5 5.5 0 0 1-9.201 2.466.75.75 0 1 1 1.061-1.06 4 4 0 1 0-1.18-2.83.75.75 0 0 1-1.5 0 5.5 5.5 0 1 1 10.82 1.424Z" clip-rule="evenodd" /><path d="M4.5 3.75a.75.75 0 0 1 .75.75v2.19l2.22-2.22a.75.75 0 0 1 1.06 1.06L5.03 9.03a.75.75 0 0 1-1.28-.53v-4a.75.75 0 0 1 .75-.75Z" /></svg>`
 }
 
-function syncResetButton() {
-  const button = document.getElementById("reset-timeseries-zoom")
-  if (!button) return
-
-  button.classList.toggle("hidden", !globalZoomDomain)
+function setGlobalZoomDomain(domain) {
+  globalZoomDomain = domain
+  window.dispatchEvent(new CustomEvent(zoomChangedEvent, {detail: {domain}}))
 }
 
 function validZoomDomain(zoomDomain, xExtent) {

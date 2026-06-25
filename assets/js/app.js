@@ -77,6 +77,38 @@ const Hooks = {
       this.el.classList.toggle("sidebar-collapsed", state !== "open")
     },
   },
+  TimePicker: {
+    mounted() {
+      this.closeOnOutsidePointerDown = event => {
+        if (!this.el.open || this.el.contains(event.target)) return
+
+        this.el.open = false
+      }
+
+      this.closeOnEscape = event => {
+        if (!this.el.open || event.key !== "Escape") return
+
+        this.el.open = false
+      }
+
+      this.closeAfterAction = event => {
+        if (!event.target.closest("[data-close-time-picker]")) return
+
+        requestAnimationFrame(() => {
+          this.el.open = false
+        })
+      }
+
+      document.addEventListener("pointerdown", this.closeOnOutsidePointerDown, true)
+      document.addEventListener("keydown", this.closeOnEscape)
+      this.el.addEventListener("click", this.closeAfterAction)
+    },
+    destroyed() {
+      document.removeEventListener("pointerdown", this.closeOnOutsidePointerDown, true)
+      document.removeEventListener("keydown", this.closeOnEscape)
+      this.el.removeEventListener("click", this.closeAfterAction)
+    },
+  },
 }
 
 const liveSocket = new LiveSocket("/live", Socket, {

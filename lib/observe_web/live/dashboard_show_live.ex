@@ -455,15 +455,6 @@ defmodule ObserveWeb.DashboardShowLive do
               </p>
             </div>
             <div class="flex flex-wrap items-end gap-2">
-              <button
-                id="reset-timeseries-zoom"
-                type="button"
-                aria-label="Reset timeseries zoom"
-                title="Reset zoom"
-                class="hidden grid size-8 place-items-center border border-[#fab387]/25 bg-[#181825]/80 text-[#fab387] transition hover:border-[#fab387]/55 hover:text-[#f9e2af]"
-              >
-                <.icon name="hero-arrow-path-micro" class="size-4" />
-              </button>
               <.form
                 for={
                   to_form(%{
@@ -478,7 +469,11 @@ defmodule ObserveWeb.DashboardShowLive do
                 phx-change="controls_changed"
                 class="flex flex-wrap gap-2"
               >
-                <details id="dashboard-time-picker" class="dashboard-time-picker relative">
+                <details
+                  id="dashboard-time-picker"
+                  phx-hook="TimePicker"
+                  class="dashboard-time-picker relative"
+                >
                   <summary class="flex min-h-8 cursor-pointer list-none items-center gap-2 border border-[#b4befe]/20 bg-[#11111b]/70 px-3 py-1.5 text-xs font-semibold text-[#cdd6f4] shadow-lg shadow-black/10 transition hover:border-[#89dceb]/50 hover:bg-[#181825] [&::-webkit-details-marker]:hidden">
                     <.icon name="hero-clock-micro" class="size-4 text-[#89dceb]" />
                     <span>{time_range_button_label(@time_range_preset, @start_time, @end_time)}</span>
@@ -495,6 +490,7 @@ defmodule ObserveWeb.DashboardShowLive do
                           type="button"
                           phx-click="select_time_range"
                           phx-value-range={value}
+                          data-close-time-picker
                           class={[
                             "block w-full px-2 py-1.5 text-left text-xs font-semibold transition hover:bg-[#313244] hover:text-[#f5c2e7]",
                             @time_range_preset == value && "bg-[#313244] text-[#f5c2e7]"
@@ -545,6 +541,7 @@ defmodule ObserveWeb.DashboardShowLive do
                           <button
                             type="button"
                             phx-click="refresh"
+                            data-close-time-picker
                             class="border border-[#89dceb]/40 bg-[#89dceb] px-3 py-1.5 text-xs font-bold text-[#11111b] transition hover:bg-[#f5c2e7]"
                           >
                             Apply time range
@@ -1068,8 +1065,7 @@ defmodule ObserveWeb.DashboardShowLive do
 
     series =
       points
-      |> Enum.group_by(&series_label(&1, panel))
-      |> Enum.sort_by(fn {label, _rows} -> label end)
+      |> group_series(panel)
       |> Enum.map(fn {label, series_rows} ->
         %{
           label: label,
@@ -1081,6 +1077,22 @@ defmodule ObserveWeb.DashboardShowLive do
       end)
 
     %{series: series}
+  end
+
+  defp group_series(points, panel) do
+    {order, groups} =
+      Enum.reduce(points, {[], %{}}, fn row, {order, groups} ->
+        label = series_label(row, panel)
+
+        order = if Map.has_key?(groups, label), do: order, else: [label | order]
+        groups = Map.update(groups, label, [row], &[row | &1])
+
+        {order, groups}
+      end)
+
+    order
+    |> Enum.reverse()
+    |> Enum.map(fn label -> {label, groups[label] |> Enum.reverse()} end)
   end
 
   defp series_label(row, panel) do

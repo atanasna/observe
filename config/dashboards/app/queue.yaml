@@ -154,14 +154,16 @@ panels:
     title: Pending
     description: Pending queue size by priority for the selected deployment.
     type: timeseries
+    legend:
+      position: right
     stacked: true
     layout:
       width: full
       height: 300
     datasets:
+      - queue_high_pending
       - queue_default_pending
       - queue_low_pending
-      - queue_high_pending
       - queue_bulk_pending
   - id: running
     title: Running
@@ -174,9 +176,9 @@ panels:
       width: 8
       height: 240
     datasets:
+      - queue_high_running
       - queue_default_running
       - queue_low_running
-      - queue_high_running
       - queue_bulk_running
   - id: delayed
     description: Delayed queue size by priority for the selected deployment.
@@ -189,9 +191,9 @@ panels:
       width: 8
       height: 240
     datasets:
+      - queue_high_delayed
       - queue_default_delayed
       - queue_low_delayed
-      - queue_high_delayed
       - queue_bulk_delayed
 
   - id: experimental

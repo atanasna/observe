@@ -32,53 +32,9 @@ queries:
       range: true
       interval: 1m
       query: |
-        topk(50, 
+        topk(20, 
           (rate(app_queue_job_execution_time{deployment=~"${inputs.deployment}",tenant=~"${inputs.tenant}", priority=~"${inputs.priority}", exported_job=~"${inputs.job}"}[2m])
           / ignoring(type)
           rate(app_queue_job_count{deployment=~"${inputs.deployment}",tenant=~"${inputs.tenant}",priority=~"${inputs.priority}",type="processed", exported_job=~"${inputs.job}"}[2m])) 
           != +Inf
         )
-        # (
-        #   (
-        #     (
-        #       sum by (tenant, priority, exported_job) (
-        #         rate(app_queue_job_execution_time{deployment=~"${inputs.deployment}",tenant=~"${inputs.tenant}",priority="default",exported_job=~"${inputs.job}"}[2m])
-        #       )
-        #       /
-        #       sum by (tenant, priority, exported_job) (
-        #         rate(app_queue_job_count{deployment=~"${inputs.deployment}",tenant=~"${inputs.tenant}",priority="default",exported_job=~"${inputs.job}",type="processed"}[2m])
-        #       )
-        #     )
-        #     and on (tenant, priority, exported_job)
-        #     sum by (tenant, priority, exported_job) (
-        #       rate(app_queue_job_count{deployment=~"${inputs.deployment}",tenant=~"${inputs.tenant}",priority="default",exported_job=~"${inputs.job}",type="processed"}[2m])
-        #     ) > 0
-        #   )
-        #   or on (tenant, priority, exported_job)
-        #   0 * sum by (tenant, priority, exported_job) (
-        #     rate(app_queue_job_count{deployment=~"${inputs.deployment}",tenant=~"${inputs.tenant}",priority="default",exported_job=~"${inputs.job}",type="processed"}[2m])
-        #   )
-        # )
-        # and on (tenant, priority, exported_job)
-        # topk(
-        #   10,
-        #   avg_over_time(
-        #     (
-        #       (
-        #         (
-        #           sum by (tenant, priority, exported_job) (
-        #             rate(app_queue_job_execution_time{deployment=~"${inputs.deployment}",tenant=~"${inputs.tenant}",priority="default",exported_job=~"${inputs.job}"}[2m])
-        #           )
-        #           /
-        #           sum by (tenant, priority, exported_job) (
-        #             rate(app_queue_job_count{deployment=~"${inputs.deployment}",tenant=~"${inputs.tenant}",priority="default",exported_job=~"${inputs.job}",type="processed"}[2m])
-        #           )
-        #         )
-        #         and on (tenant, priority, exported_job)
-        #         sum by (tenant, priority, exported_job) (
-        #           rate(app_queue_job_count{deployment=~"${inputs.deployment}",tenant=~"${inputs.tenant}",priority="default",exported_job=~"${inputs.job}",type="processed"}[2m])
-        #         ) > 0
-        #       )
-        #     )[3h:1m] @ end()
-        #   )
-        # )

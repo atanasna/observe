@@ -9,8 +9,9 @@ defmodule ObserveWeb.DashboardShowLiveTest do
     refute has_element?(view, "#dashboard-time-range")
     assert has_element?(view, "#dashboard-start-time")
     assert has_element?(view, "#dashboard-end-time")
+    assert has_element?(view, ~s(#dashboard-time-picker[phx-hook="TimePicker"]))
+    assert has_element?(view, ~s(#dashboard-time-picker [data-close-time-picker]))
     assert has_element?(view, "#dashboard-refresh-interval")
-    assert has_element?(view, "#reset-timeseries-zoom")
     assert has_element?(view, "#toggle-dashboard-info")
   end
 
@@ -40,7 +41,7 @@ defmodule ObserveWeb.DashboardShowLiveTest do
     assert has_element?(view, "#variables_tenant")
     assert has_element?(view, "#panel-pending")
     assert has_element?(view, ~s(#panel-pending[data-stacked="true"]))
-    assert has_element?(view, ~s(#panel-pending[data-legend-position="bottom"]))
+    assert has_element?(view, ~s(#panel-pending[data-legend-position="right"]))
     assert has_element?(view, ~s(#panel-pending[data-layout-width="16"]))
     assert has_element?(view, ~s(#panel-pending[data-layout-height="300"]))
     assert has_element?(view, ~s(#panel-pending button[aria-label="Panel description"]))
