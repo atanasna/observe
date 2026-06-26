@@ -1,0 +1,40 @@
+apiVersion: observe/v1
+kind: ProcessorCollection
+
+metadata:
+  folder: applications/queues
+
+processors:
+  queue_jobs_et:
+    no_value: 0
+    fill_missing: 0
+    inputs:
+      deployment: {}
+      tenant: {}
+      job: {}
+      priority: {}
+    query:
+      name: queue_jobs_et
+      inputs:
+        deployment: ${inputs.deployment}
+        tenant: ${inputs.tenant}
+        job: ${inputs.job}
+        priority: ${inputs.priority}
+    transform:
+      - math:
+          field: value
+          divide: 1000
+
+  queue_jobs_preasure:
+    no_value: 0
+    fill_missing: 0
+    inputs:
+      deployment: {}
+      tenant: {}
+      priority: {}
+    query:
+      name: queue_jobs_preasure
+      inputs:
+        deployment: ${inputs.deployment}
+        tenant: ${inputs.tenant}
+        priority: ${inputs.priority}

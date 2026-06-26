@@ -43,8 +43,9 @@ defmodule ObserveWeb.DashboardShowLive do
          |> assign(:run_id, nil)
          |> assign(:loading?, false)
          |> assign(:loading_datasets, MapSet.new())
+         |> assign(:info_open?, false)
          |> assign(:collapsed_sections, collapsed_sections(dashboard))
-         |> assign(:plan, nil)
+         |> assign(:plan, Map.get(dashboard, "plan"))
          |> assign(:datasets, %{})
          |> assign(:error, nil)
          |> start_dashboard_run(variable_values)}
@@ -117,6 +118,10 @@ defmodule ObserveWeb.DashboardShowLive do
       end
 
     {:noreply, assign(socket, :collapsed_sections, collapsed_sections)}
+  end
+
+  def handle_event("toggle_dashboard_info", _params, socket) do
+    {:noreply, update(socket, :info_open?, &(!&1))}
   end
 
   def handle_event("controls_changed", %{"controls" => controls}, socket) do
@@ -291,7 +296,6 @@ defmodule ObserveWeb.DashboardShowLive do
     |> assign(:loading_datasets, loading_datasets(only))
     |> assign(:run_ref, task.ref)
     |> assign(:run_id, run_id)
-    |> assign(:plan, nil)
     |> maybe_clear_datasets(only)
     |> assign(:error, nil)
   end
@@ -355,7 +359,7 @@ defmodule ObserveWeb.DashboardShowLive do
   defp include_dependent_datasets(affected, datasets) do
     next =
       Enum.reduce(datasets, affected, fn {name, dataset}, acc ->
-        parent = source_dataset_name(dataset) || Map.get(dataset, "from")
+        parent = source_processor_name(dataset) || Map.get(dataset, "from")
 
         if is_binary(parent) and MapSet.member?(acc, parent) do
           MapSet.put(acc, name)
@@ -390,8 +394,10 @@ defmodule ObserveWeb.DashboardShowLive do
   defp variable_refs(value) when is_list(value), do: Enum.flat_map(value, &variable_refs/1)
   defp variable_refs(_value), do: []
 
-  defp source_dataset_name(%{"source" => "dataset", "dataset" => %{"name" => name}}), do: name
-  defp source_dataset_name(_dataset), do: nil
+  defp source_processor_name(%{"source" => "processor", "processor" => %{"name" => name}}),
+    do: name
+
+  defp source_processor_name(_dataset), do: nil
 
   defp start_query_task(fun) do
     ensure_query_task_supervisor!()
@@ -561,6 +567,23 @@ defmodule ObserveWeb.DashboardShowLive do
               </p>
             </div>
             <div class="flex flex-wrap items-end gap-2">
+              <button
+                id="toggle-dashboard-info"
+                type="button"
+                phx-click="toggle_dashboard_info"
+                aria-expanded={to_string(@info_open?)}
+                aria-controls="dashboard-info-drawer"
+                class={[
+                  "grid min-h-8 place-items-center border px-2.5 py-1.5 text-xs font-bold transition focus:outline-none",
+                  if(@info_open?,
+                    do: "border-[#89dceb]/50 bg-[#89dceb] text-[#11111b]",
+                    else:
+                      "border-[#b4befe]/15 bg-[#11111b]/55 text-[#89dceb] hover:border-[#89dceb]/50 hover:bg-[#181825]"
+                  )
+                ]}
+              >
+                <.icon name="hero-information-circle-micro" class="size-4" />
+              </button>
               <.form
                 for={
                   to_form(%{
@@ -707,6 +730,113 @@ defmodule ObserveWeb.DashboardShowLive do
               </select>
             </div>
           </.form>
+
+          <section
+            :if={@info_open?}
+            id="dashboard-info-drawer"
+            class="mocha-card sharp-corner mt-3 grid gap-3 p-3 lg:grid-cols-[0.8fr_1fr]"
+          >
+            <div>
+              <div class="flex items-center justify-between gap-3">
+                <h2 class="text-sm font-semibold text-[#cdd6f4]">Applied dashboard plan</h2>
+                <span class="text-[0.65rem] font-semibold uppercase tracking-[0.16em] text-[#89dceb]">
+                  {plan_status(@plan, @loading?)}
+                </span>
+              </div>
+              <dl class="mt-3 grid gap-1.5 text-xs">
+                <div
+                  :for={{name, value} <- applied_variables(@plan, @variable_values)}
+                  class="grid grid-cols-[7rem_1fr] gap-2 border border-[#b4befe]/10 bg-[#11111b]/35 px-2 py-1.5"
+                >
+                  <dt class="font-semibold text-[#89dceb]">{name}</dt>
+                  <dd class="min-w-0 truncate text-[#cdd6f4]">{format_info_value(value)}</dd>
+                </div>
+              </dl>
+            </div>
+
+            <div class="grid gap-3 xl:grid-cols-2">
+              <div>
+                <h3 class="text-xs font-bold uppercase tracking-[0.16em] text-[#cba6f7]">
+                  Datasets
+                </h3>
+                <div class="mt-2 max-h-80 space-y-2 overflow-auto pr-1">
+                  <div
+                    :for={dataset <- applied_datasets(@plan)}
+                    id={"dashboard-info-dataset-#{dataset.name}"}
+                    class="border border-[#b4befe]/10 bg-[#11111b]/35 p-2 text-xs"
+                  >
+                    <div class="flex items-center justify-between gap-2">
+                      <p class="truncate font-semibold text-[#cdd6f4]">{dataset.name}</p>
+                      <span class="shrink-0 text-[0.65rem] uppercase tracking-[0.12em] text-[#f9e2af]">
+                        {dataset.kind}
+                      </span>
+                    </div>
+                    <p class="mt-1 truncate text-[#bac2de]">{dataset.detail}</p>
+                  </div>
+                  <p :if={applied_datasets(@plan) == []} class="text-xs text-[#9399b2]">
+                    No datasets planned yet.
+                  </p>
+                </div>
+              </div>
+
+              <div>
+                <h3 class="text-xs font-bold uppercase tracking-[0.16em] text-[#f5c2e7]">
+                  Queries
+                </h3>
+                <div class="mt-2 max-h-80 space-y-2 overflow-auto pr-1">
+                  <div
+                    :for={query <- applied_queries(@plan)}
+                    id={"dashboard-info-query-#{query.name}"}
+                    class="border border-[#b4befe]/10 bg-[#11111b]/35 p-2 text-xs"
+                  >
+                    <div class="flex items-center justify-between gap-2">
+                      <p class="truncate font-semibold text-[#cdd6f4]">{query.name}</p>
+                      <span class="shrink-0 text-[0.65rem] uppercase tracking-[0.12em] text-[#89dceb]">
+                        {query.kind}
+                      </span>
+                    </div>
+                    <p :if={query.datasource} class="mt-1 truncate text-[#bac2de]">
+                      datasource: {query.datasource}
+                    </p>
+                    <code
+                      :if={query.query}
+                      class="mt-1 block max-h-24 overflow-auto whitespace-pre-wrap border border-[#45475a]/60 bg-[#181825]/70 p-2 text-[0.68rem] leading-4 text-[#a6e3a1]"
+                    >{query.query}</code>
+                  </div>
+                  <p :if={applied_queries(@plan) == []} class="text-xs text-[#9399b2]">
+                    No queries planned yet.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div class="lg:col-span-2">
+              <div class="flex flex-col gap-2 border border-[#b4befe]/10 bg-[#11111b]/25 p-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <h3 class="text-xs font-bold uppercase tracking-[0.16em] text-[#94e2d5]">
+                    Datasource requests
+                  </h3>
+                  <p class="mt-1 text-xs text-[#9399b2]">
+                    Detailed datasets, processors, and plan steps are shown inside each panel.
+                  </p>
+                </div>
+                <div id="dashboard-info-request-summary" class="flex flex-wrap gap-1.5 text-xs">
+                  <span
+                    :for={request <- datasource_request_summary(@plan)}
+                    class="border border-[#94e2d5]/20 bg-[#94e2d5]/10 px-2 py-1 font-semibold text-[#94e2d5]"
+                  >
+                    {request.datasource}: {request.count}
+                  </span>
+                  <span
+                    :if={datasource_request_summary(@plan) == []}
+                    class="text-[#9399b2]"
+                  >
+                    No datasource requests planned.
+                  </span>
+                </div>
+              </div>
+            </div>
+          </section>
         </div>
 
         <div
@@ -738,7 +868,10 @@ defmodule ObserveWeb.DashboardShowLive do
               )
             ]}
           >
-            <div :if={panel["type"] != "row"} class="mb-2 flex items-center gap-1.5">
+            <div
+              :if={panel["type"] != "row" and panel["type"] != "timeseries"}
+              class="mb-2 flex items-center gap-1.5"
+            >
               <h2 class="text-sm font-semibold text-[#cdd6f4]">
                 {panel_title(panel, @dashboard, @variable_values, @datasources)}
               </h2>
@@ -758,6 +891,64 @@ defmodule ObserveWeb.DashboardShowLive do
                 </span>
               </span>
             </div>
+
+            <%= if @info_open? and panel["type"] != "row" do %>
+              <% panel_info = panel_dependency_summary(@plan, panel, @dashboard) %>
+              <details
+                id={"panel-info-#{panel["id"]}"}
+                class="mb-2 border border-[#94e2d5]/15 bg-[#94e2d5]/5 text-xs"
+              >
+                <summary class="flex cursor-pointer list-none items-center justify-between gap-3 px-2 py-1.5 font-semibold text-[#94e2d5] [&::-webkit-details-marker]:hidden">
+                  <span>Plan details</span>
+                  <span class="text-[0.65rem] uppercase tracking-[0.14em] text-[#bac2de]">
+                    {panel_info.request_count} requests · {length(panel_info.datasets)} datasets
+                  </span>
+                </summary>
+
+                <div class="grid gap-2 border-t border-[#94e2d5]/10 p-2 md:grid-cols-2">
+                  <div>
+                    <p class="font-bold uppercase tracking-[0.14em] text-[#f9e2af]">Datasets</p>
+                    <div class="mt-1 flex flex-wrap gap-1">
+                      <span
+                        :for={dataset <- panel_info.datasets}
+                        class="border border-[#f9e2af]/20 bg-[#f9e2af]/10 px-1.5 py-0.5 text-[#f9e2af]"
+                      >
+                        {dataset.name}{if Map.get(dataset, :reused?), do: " reused", else: ""}
+                      </span>
+                    </div>
+                  </div>
+                  <div>
+                    <p class="font-bold uppercase tracking-[0.14em] text-[#94e2d5]">
+                      Datasource requests
+                    </p>
+                    <div class="mt-1 flex flex-wrap gap-1">
+                      <span
+                        :for={request <- panel_info.requests}
+                        class="border border-[#94e2d5]/20 bg-[#94e2d5]/10 px-1.5 py-0.5 text-[#94e2d5]"
+                      >
+                        {request.datasource}: {request.count}
+                      </span>
+                      <span :if={panel_info.requests == []} class="text-[#9399b2]">none</span>
+                    </div>
+                  </div>
+
+                  <div class="md:col-span-2">
+                    <p class="font-bold uppercase tracking-[0.14em] text-[#cba6f7]">Plan steps</p>
+                    <div class="mt-1 grid gap-1 lg:grid-cols-2">
+                      <div
+                        :for={node <- panel_info.nodes}
+                        class="grid grid-cols-[1fr_auto] gap-2 border border-[#45475a]/50 bg-[#181825]/55 px-2 py-1"
+                      >
+                        <span class="min-w-0 truncate text-[#cdd6f4]">{node.name}</span>
+                        <span class="text-[0.65rem] uppercase tracking-[0.12em] text-[#bac2de]">
+                          {node.kind}{if node.datasource, do: " / #{node.datasource}", else: ""}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </details>
+            <% end %>
 
             <%= if panel_loading?(panel, @datasets, @loading?, @loading_datasets) do %>
               <div class="flex min-h-28 items-center justify-center gap-3 border border-[#89dceb]/20 bg-[#89dceb]/10 p-4 text-xs font-semibold uppercase tracking-[0.16em] text-[#89dceb]">
@@ -806,6 +997,10 @@ defmodule ObserveWeb.DashboardShowLive do
                       id={"chart-#{panel["id"]}"}
                       panel={panel}
                       rows={panel_rows(panel, @datasets, @dashboard)}
+                      title={panel_title(panel, @dashboard, @variable_values, @datasources)}
+                      description={
+                        panel_description(panel, @dashboard, @variable_values, @datasources)
+                      }
                     />
                   <% "sunburst" -> %>
                     <.sunburst_chart
@@ -857,6 +1052,8 @@ defmodule ObserveWeb.DashboardShowLive do
   attr :id, :string, required: true
   attr :panel, :map, required: true
   attr :rows, :list, required: true
+  attr :title, :string, required: true
+  attr :description, :string, default: nil
 
   def timeseries_chart(assigns) do
     assigns =
@@ -875,7 +1072,9 @@ defmodule ObserveWeb.DashboardShowLive do
       data-height={@height}
       data-stacked={@stacked}
       data-legend-position={@legend_position}
-      class="relative min-h-40 border border-[#89dceb]/20 bg-[#11111b]/45 p-2"
+      data-title={@title}
+      data-description={@description}
+      class="relative min-h-40"
     />
     """
   end
@@ -897,7 +1096,7 @@ defmodule ObserveWeb.DashboardShowLive do
       phx-update="ignore"
       data-chart={@chart_json}
       data-height={@height}
-      class="relative min-h-40 border border-[#cba6f7]/20 bg-[#11111b]/45 p-2"
+      class="relative min-h-40"
     />
     """
   end
@@ -935,6 +1134,195 @@ defmodule ObserveWeb.DashboardShowLive do
 
   defp columns([]), do: []
   defp columns([row | _]), do: row |> Map.drop(["legend_format"]) |> Map.keys()
+
+  defp plan_status(nil, true), do: "planning"
+  defp plan_status(nil, _loading?), do: "not planned"
+  defp plan_status(_plan, true), do: "refreshing"
+  defp plan_status(_plan, _loading?), do: "current"
+
+  defp applied_variables(%{variables: variables}, _fallback) when is_map(variables) do
+    Enum.sort_by(variables, fn {name, _value} -> name end)
+  end
+
+  defp applied_variables(_plan, fallback) do
+    Enum.sort_by(fallback || %{}, fn {name, _value} -> name end)
+  end
+
+  defp applied_datasets(nil), do: []
+
+  defp applied_datasets(%{query_order: order, queries: queries}) do
+    Enum.map(order || [], fn name ->
+      query = Map.get(queries || %{}, name, %{})
+
+      %{
+        name: name,
+        kind: Map.get(query, "kind", "unknown"),
+        detail: dataset_detail(query)
+      }
+    end)
+  end
+
+  defp applied_datasets(_plan), do: []
+
+  defp applied_queries(nil), do: []
+
+  defp applied_queries(%{query_order: order, queries: queries}) do
+    Enum.map(order || [], fn name ->
+      query = Map.get(queries || %{}, name, %{})
+
+      %{
+        name: name,
+        kind: Map.get(query, "kind", "unknown"),
+        datasource: Map.get(query, "datasource"),
+        query: query |> get_in(["request", "query"]) |> truncate_info(900)
+      }
+    end)
+  end
+
+  defp applied_queries(_plan), do: []
+
+  defp datasource_request_summary(nil), do: []
+
+  defp datasource_request_summary(%{query_order: order, queries: queries}) do
+    order
+    |> source_nodes(queries)
+    |> request_counts()
+  end
+
+  defp datasource_request_summary(_plan), do: []
+
+  defp panel_dependency_summary(nil, panel, _dashboard), do: empty_panel_dependency_summary(panel)
+
+  defp panel_dependency_summary(%{queries: queries} = plan, panel, dashboard) do
+    dataset_usage = panel_dataset_usage(Map.get(dashboard, "panels", []))
+    panel_dependency_summary(plan, panel, dashboard, dataset_usage, queries || %{})
+  end
+
+  defp panel_dependency_summary(_plan, panel, _dashboard),
+    do: empty_panel_dependency_summary(panel)
+
+  defp panel_dependency_summary(plan, panel, dashboard, dataset_usage, queries) do
+    dataset_names = panel_dataset_names(panel) |> Enum.reject(&is_nil/1)
+    nodes = panel_dependency_nodes(dataset_names, queries)
+    requests = nodes |> Enum.filter(&(Map.get(&1, "kind") == "source")) |> request_counts()
+
+    %{
+      id: Map.get(panel, "id", "panel"),
+      title: panel_title(panel, dashboard, plan.variables || %{}, %{}),
+      type: Map.get(panel, "type", "panel"),
+      datasets:
+        Enum.map(dataset_names, fn name ->
+          %{name: name, reused?: Map.get(dataset_usage, name, 0) > 1}
+        end),
+      nodes: Enum.map(nodes, &dependency_node_info/1),
+      requests: requests,
+      request_count: Enum.reduce(requests, 0, &(&2 + &1.count))
+    }
+  end
+
+  defp empty_panel_dependency_summary(panel) do
+    %{
+      id: Map.get(panel, "id", "panel"),
+      title: Map.get(panel, "title", Map.get(panel, "id", "panel")),
+      type: Map.get(panel, "type", "panel"),
+      datasets: [],
+      nodes: [],
+      requests: [],
+      request_count: 0
+    }
+  end
+
+  defp source_nodes(order, queries) do
+    order
+    |> Enum.map(&Map.get(queries || %{}, &1, %{}))
+    |> Enum.filter(&(Map.get(&1, "kind") == "source"))
+  end
+
+  defp request_counts(nodes) do
+    nodes
+    |> Enum.map(&(Map.get(&1, "datasource") || "unknown"))
+    |> Enum.frequencies()
+    |> Enum.map(fn {datasource, count} -> %{datasource: datasource, count: count} end)
+    |> Enum.sort_by(& &1.datasource)
+  end
+
+  defp panel_dependency_nodes(dataset_names, queries) do
+    {order, _seen} =
+      Enum.reduce(dataset_names, {[], MapSet.new()}, fn name, {order, seen} ->
+        collect_dependency_nodes(name, queries, order, seen)
+      end)
+
+    Enum.reverse(order)
+  end
+
+  defp collect_dependency_nodes(name, queries, order, seen) do
+    cond do
+      MapSet.member?(seen, name) ->
+        {order, seen}
+
+      not Map.has_key?(queries, name) ->
+        {order, MapSet.put(seen, name)}
+
+      true ->
+        seen = MapSet.put(seen, name)
+        query = Map.fetch!(queries, name)
+
+        {order, seen} =
+          case Map.get(query, "from") do
+            parent when is_binary(parent) ->
+              collect_dependency_nodes(parent, queries, order, seen)
+
+            _parent ->
+              {order, seen}
+          end
+
+        {[Map.put(query, "_name", name) | order], seen}
+    end
+  end
+
+  defp dependency_node_info(query) do
+    %{
+      name: Map.get(query, "_name"),
+      kind: Map.get(query, "kind", "unknown"),
+      datasource: Map.get(query, "datasource")
+    }
+  end
+
+  defp panel_dataset_usage(panels) do
+    panels
+    |> Enum.reject(&(Map.get(&1, "type") == "row"))
+    |> Enum.flat_map(&panel_dataset_names/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.frequencies()
+  end
+
+  defp dataset_detail(%{"kind" => "source"} = query) do
+    query_ref = Map.get(query, "query_ref")
+    datasource = Map.get(query, "datasource")
+
+    cond do
+      is_binary(query_ref) and is_binary(datasource) -> "#{query_ref} via #{datasource}"
+      is_binary(query_ref) -> query_ref
+      is_binary(datasource) -> "via #{datasource}"
+      true -> "source query"
+    end
+  end
+
+  defp dataset_detail(%{"kind" => "derived", "from" => from}) when is_binary(from),
+    do: "from #{from}"
+
+  defp dataset_detail(_query), do: "dataset"
+
+  defp format_info_value(value) when is_binary(value), do: value
+  defp format_info_value(value), do: inspect(value, limit: 20)
+
+  defp truncate_info(nil, _limit), do: nil
+
+  defp truncate_info(value, limit) when is_binary(value) do
+    if String.length(value) > limit, do: String.slice(value, 0, limit) <> "...", else: value
+  end
+
+  defp truncate_info(value, _limit), do: value
 
   defp panel_rows(%{"datasets" => panel_datasets}, datasets, dashboard)
        when is_list(panel_datasets) do

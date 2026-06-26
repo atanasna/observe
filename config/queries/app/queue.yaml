@@ -46,7 +46,7 @@ queries:
       range: true
       interval: 1m
       query: |
-        topk(10,
+        topk(20,
           rate(app_queue_job_execution_time{deployment=~"${inputs.deployment}",tenant=~"${inputs.tenant}",priority=~"${inputs.priority}"}[2m])
           / ignoring(type) rate(app_queue_job_count{deployment=~"${inputs.deployment}",tenant=~"${inputs.tenant}",priority=~"${inputs.priority}",type="processed"}[2m])
           * ignoring(type) group_left rate(app_queue_job_count{deployment=~"${inputs.deployment}",tenant=~"${inputs.tenant}",priority=~"${inputs.priority}",type="processed"}[2m])

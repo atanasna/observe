@@ -1,6 +1,6 @@
 defmodule Observe.Provisioning do
   @moduledoc """
-  Loads YAML-provisioned datasources, queries, datasets, and dashboards.
+  Loads YAML-provisioned datasources, queries, processors, and dashboards.
   """
 
   alias Observe.QueryGraph
@@ -8,16 +8,21 @@ defmodule Observe.Provisioning do
 
   @datasource_dir Path.expand("../../config/datasources", __DIR__)
   @query_dir Path.expand("../../config/queries", __DIR__)
-  @dataset_dir Path.expand("../../config/datasets", __DIR__)
+  @processor_dir Path.expand("../../config/processors", __DIR__)
   @dashboard_dir Path.expand("../../config/dashboards", __DIR__)
 
   def load do
     with {:ok, datasources} <- load_datasources(),
          {:ok, queries} <- load_queries(),
-         {:ok, datasets} <- load_datasets(),
-         {:ok, dashboards} <- load_dashboards(datasources, queries, datasets) do
+         {:ok, processors} <- load_processors(),
+         {:ok, dashboards} <- load_dashboards(datasources, queries, processors) do
       {:ok,
-       %{datasources: datasources, queries: queries, datasets: datasets, dashboards: dashboards}}
+       %{
+         datasources: datasources,
+         queries: queries,
+         processors: processors,
+         dashboards: dashboards
+       }}
     end
   end
 
@@ -70,23 +75,23 @@ defmodule Observe.Provisioning do
     end)
   end
 
-  def load_datasets(dir \\ @dataset_dir) do
+  def load_processors(dir \\ @processor_dir) do
     dir
     |> yaml_files()
     |> Enum.reduce_while({:ok, %{}}, fn path, {:ok, acc} ->
       case read_yaml(path) do
-        {:ok, %{"datasets" => datasets} = document} when is_map(datasets) ->
+        {:ok, %{"processors" => processors} = document} when is_map(processors) ->
           document_folder = get_in(document, ["metadata", "folder"])
 
-          datasets =
-            Map.new(datasets, fn {name, dataset} ->
-              {name, put_metadata(dataset, dir, path, document_folder)}
+          processors =
+            Map.new(processors, fn {name, processor} ->
+              {name, put_metadata(processor, dir, path, document_folder)}
             end)
 
-          {:cont, {:ok, Map.merge(acc, datasets)}}
+          {:cont, {:ok, Map.merge(acc, processors)}}
 
         {:ok, _} ->
-          {:halt, {:error, "#{path} must contain a datasets map"}}
+          {:halt, {:error, "#{path} must contain a processors map"}}
 
         {:error, reason} ->
           {:halt, {:error, reason}}
@@ -94,14 +99,14 @@ defmodule Observe.Provisioning do
     end)
   end
 
-  def load_dashboards(datasources, queries \\ %{}, datasets \\ %{}, dir \\ @dashboard_dir) do
+  def load_dashboards(datasources, queries \\ %{}, processors \\ %{}, dir \\ @dashboard_dir) do
     dir
     |> yaml_files()
     |> Enum.reduce_while({:ok, %{}}, fn path, {:ok, acc} ->
       case read_yaml(path) do
         {:ok, dashboard} ->
           with {:ok, normalized} <- normalize_dashboard(dashboard, path),
-               {:ok, resolved} <- resolve_dashboard_datasets(normalized, datasets),
+               {:ok, resolved} <- resolve_dashboard_processors(normalized, processors),
                {:ok, resolved} <- resolve_dashboard_queries(resolved, queries),
                {:ok, plan} <- QueryGraph.plan(resolved, datasources) do
             name = get_in(resolved, ["metadata", "name"])
@@ -135,8 +140,8 @@ defmodule Observe.Provisioning do
       not is_list(Map.get(dashboard, "queryRefs", [])) ->
         {:error, "dashboard queryRefs must be a list"}
 
-      not is_map(Map.get(dashboard, "datasetRefs", %{})) ->
-        {:error, "dashboard datasetRefs must be a map"}
+      not is_map(Map.get(dashboard, "processors", %{})) ->
+        {:error, "dashboard processors must be a map"}
 
       not is_map(Map.get(dashboard, "datasets", %{})) ->
         {:error, "dashboard datasets must be a map"}
@@ -151,7 +156,7 @@ defmodule Observe.Provisioning do
          |> Map.put_new("variables", %{})
          |> Map.put_new("datasources", %{})
          |> Map.put_new("queryRefs", [])
-         |> Map.put_new("datasetRefs", %{})
+         |> Map.put_new("processors", %{})
          |> Map.put_new("queries", %{})
          |> Map.put_new("datasets", %{})
          |> Map.put_new("panels", [])}
@@ -164,7 +169,8 @@ defmodule Observe.Provisioning do
     query_refs =
       dashboard
       |> Map.get("queryRefs", [])
-      |> Enum.concat(inferred_query_refs(Map.get(dashboard, "datasets", %{})))
+      |> Enum.concat(inferred_query_refs(Map.get(dashboard, "processors", %{})))
+      |> Enum.concat(inferred_dataset_query_refs(Map.get(dashboard, "datasets", %{})))
       |> Enum.uniq()
 
     with {:ok, referenced_queries} <-
@@ -178,36 +184,68 @@ defmodule Observe.Provisioning do
     end
   end
 
-  defp inferred_query_refs(datasets) do
-    datasets
-    |> Enum.flat_map(fn {name, dataset} ->
-      inferred_query_refs(name, dataset, datasets, MapSet.new())
+  defp inferred_query_refs(processors) do
+    processors
+    |> Enum.flat_map(fn {name, processor} ->
+      inferred_query_refs(name, processor, processors, MapSet.new())
     end)
   end
 
-  defp inferred_query_refs(name, dataset, datasets, seen) do
+  defp inferred_dataset_query_refs(datasets) do
+    Enum.flat_map(datasets, fn {_name, dataset} ->
+      cond do
+        is_binary(Map.get(dataset, "query")) ->
+          [Map.get(dataset, "query")]
+
+        is_map(Map.get(dataset, "query")) ->
+          case source_query_name(dataset) do
+            query_name when is_binary(query_name) and query_name != "" -> [query_name]
+            _query_name -> []
+          end
+
+        true ->
+          []
+      end
+    end)
+  end
+
+  defp inferred_query_refs(name, processor, processors, seen) do
     if MapSet.member?(seen, name) do
       []
     else
       seen = MapSet.put(seen, name)
 
       cond do
-        Map.get(dataset, "source") == "query" ->
-          case get_in(dataset, ["query", "name"]) do
+        Map.get(processor, "source") == "query" ->
+          case source_query_name(processor) do
             query_name when is_binary(query_name) and query_name != "" -> [query_name]
             _query_name -> []
           end
 
-        Map.get(dataset, "source") == "dataset" ->
-          parent_name = get_in(dataset, ["dataset", "name"])
+        Map.get(processor, "source") in ["processor", "dataset"] ->
+          parent_name = source_processor_name(processor)
 
-          case Map.get(datasets, parent_name) do
-            %{} = parent -> inferred_query_refs(parent_name, parent, datasets, seen)
+          case Map.get(processors, parent_name) do
+            %{} = parent -> inferred_query_refs(parent_name, parent, processors, seen)
             _parent -> []
           end
 
-        is_binary(Map.get(dataset, "query")) ->
-          [Map.get(dataset, "query")]
+        is_binary(Map.get(processor, "query")) ->
+          [Map.get(processor, "query")]
+
+        is_map(Map.get(processor, "query")) ->
+          case source_query_name(processor) do
+            query_name when is_binary(query_name) and query_name != "" -> [query_name]
+            _query_name -> []
+          end
+
+        is_binary(Map.get(processor, "from")) ->
+          parent_name = Map.get(processor, "from")
+
+          case Map.get(processors, parent_name) do
+            %{} = parent -> inferred_query_refs(parent_name, parent, processors, seen)
+            _parent -> []
+          end
 
         true ->
           []
@@ -227,46 +265,111 @@ defmodule Observe.Provisioning do
     end)
   end
 
-  defp resolve_dashboard_datasets(dashboard, provisioned_datasets) do
-    with {:ok, referenced_datasets} <-
-           referenced_datasets(Map.get(dashboard, "datasetRefs", %{}), provisioned_datasets) do
+  defp source_query_name(%{"query" => %{"name" => name}}), do: name
+  defp source_query_name(%{"query" => name}) when is_binary(name), do: name
+  defp source_query_name(_processor), do: nil
+
+  defp source_processor_name(%{"processor" => %{"name" => name}}), do: name
+  defp source_processor_name(%{"processor" => name}) when is_binary(name), do: name
+  defp source_processor_name(%{"dataset" => %{"name" => name}}), do: name
+  defp source_processor_name(_processor), do: nil
+
+  defp resolve_dashboard_processors(dashboard, provisioned_processors) do
+    with {:ok, referenced_processors} <-
+           referenced_processors(
+             Map.get(dashboard, "datasets", %{}),
+             provisioned_processors,
+             Map.get(dashboard, "processors", %{})
+           ) do
       {:ok,
        Map.put(
          dashboard,
-         "datasets",
-         Map.merge(referenced_datasets, Map.get(dashboard, "datasets", %{}))
+         "processors",
+         Map.merge(referenced_processors, Map.get(dashboard, "processors", %{}))
        )}
     end
   end
 
-  defp referenced_datasets(dataset_refs, provisioned_datasets) do
-    Enum.reduce_while(dataset_refs, {:ok, %{}}, fn {name, ref}, {:ok, acc} ->
-      with {:ok, dataset_name, inputs} <- dataset_ref(name, ref),
-           {:ok, dataset} <- fetch_dataset(dataset_name, provisioned_datasets) do
-        dataset =
-          dataset
-          |> Map.drop(["_meta"])
-          |> Map.put("_dataset_ref", dataset_name)
-          |> Map.put("_input_schema", Map.get(dataset, "inputs", %{}))
-          |> Map.put("inputs", inputs)
+  defp referenced_processors(datasets, provisioned_processors, dashboard_processors) do
+    Enum.reduce_while(datasets, {:ok, dashboard_processors}, fn {name, dataset}, {:ok, acc} ->
+      case dataset_processor(name, dataset) do
+        {:ok, processor_name} ->
+          with {:ok, processors} <-
+                 collect_processors(processor_name, provisioned_processors, acc, MapSet.new()) do
+            {:cont, {:ok, processors}}
+          else
+            {:error, reason} -> {:halt, {:error, reason}}
+          end
 
-        {:cont, {:ok, Map.put(acc, name, dataset)}}
-      else
-        {:error, reason} -> {:halt, {:error, reason}}
+        :skip ->
+          {:cont, {:ok, acc}}
+
+        {:error, reason} ->
+          {:halt, {:error, reason}}
       end
     end)
   end
 
-  defp dataset_ref(_name, %{"dataset" => dataset_name} = ref) when is_binary(dataset_name) do
-    {:ok, dataset_name, Map.get(ref, "inputs", %{})}
+  defp dataset_processor(_name, %{"processor" => processor_name}) when is_binary(processor_name),
+    do: {:ok, processor_name}
+
+  defp dataset_processor(_name, %{"processor" => %{"name" => processor_name}})
+       when is_binary(processor_name),
+       do: {:ok, processor_name}
+
+  defp dataset_processor(_name, dataset) when is_map(dataset) do
+    if Map.has_key?(dataset, "query") or Map.has_key?(dataset, "from") or
+         Map.has_key?(dataset, "source") do
+      :skip
+    else
+      {:error, "dashboard dataset must define processor"}
+    end
   end
 
-  defp dataset_ref(name, _ref), do: {:error, "datasetRef #{name} must define dataset"}
+  defp dataset_processor(name, _dataset), do: {:error, "dashboard dataset #{name} must be a map"}
 
-  defp fetch_dataset(name, provisioned_datasets) do
-    case Map.fetch(provisioned_datasets, name) do
-      {:ok, dataset} -> {:ok, dataset}
-      :error -> {:error, "dashboard references unknown dataset #{inspect(name)}"}
+  defp collect_processors(name, provisioned_processors, acc, seen) do
+    cond do
+      MapSet.member?(seen, name) ->
+        {:ok, acc}
+
+      true ->
+        with {:ok, processor} <- fetch_processor(name, provisioned_processors, acc) do
+          processor = Map.drop(processor, ["_meta"])
+          acc = Map.put(acc, name, processor)
+          seen = MapSet.put(seen, name)
+
+          processor
+          |> child_processor_names()
+          |> Enum.reduce_while({:ok, acc}, fn child_name, {:ok, child_acc} ->
+            case collect_processors(child_name, provisioned_processors, child_acc, seen) do
+              {:ok, child_acc} -> {:cont, {:ok, child_acc}}
+              {:error, reason} -> {:halt, {:error, reason}}
+            end
+          end)
+        end
+    end
+  end
+
+  defp child_processor_names(processor) do
+    [source_processor_name(processor), Map.get(processor, "from")]
+    |> Enum.filter(&(is_binary(&1) and &1 != ""))
+  end
+
+  defp fetch_processor(name, provisioned_processors, dashboard_processors) do
+    case Map.fetch(dashboard_processors, name) do
+      {:ok, processor} ->
+        {:ok, processor}
+
+      :error ->
+        fetch_provisioned_processor(name, provisioned_processors)
+    end
+  end
+
+  defp fetch_provisioned_processor(name, provisioned_processors) do
+    case Map.fetch(provisioned_processors, name) do
+      {:ok, processor} -> {:ok, processor}
+      :error -> {:error, "dashboard references unknown processor #{inspect(name)}"}
     end
   end
 

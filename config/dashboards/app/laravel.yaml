@@ -37,12 +37,22 @@ datasources:
   prometheus:
     ref: ${vars.source}
 
-queryRefs:
-  - roaming_outbound_requests_2xx
+processors:
+  roaming_outbound_requests_2xx:
+    inputs:
+      deployment: {}
+      tenant: {}
+      roaming_sample_type: {}
+    query:
+      name: roaming_outbound_requests_2xx
+      inputs:
+        deployment: ${inputs.deployment}
+        tenant: ${inputs.tenant}
+        roaming_sample_type: ${inputs.roaming_sample_type}
 
 datasets:
   roaming_outbound_requests_2xx:
-    query: roaming_outbound_requests_2xx
+    processor: roaming_outbound_requests_2xx
     inputs:
       deployment: ${vars.deployment}
       tenant: ${vars.tenant}

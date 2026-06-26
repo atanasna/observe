@@ -7,20 +7,23 @@ defmodule Observe.QueryGraphTest do
   test "loads datasources and dashboards recursively with folder metadata" do
     {:ok, datasources} = Provisioning.load_datasources()
     {:ok, queries} = Provisioning.load_queries()
-    {:ok, datasets} = Provisioning.load_datasets()
-    {:ok, dashboards} = Provisioning.load_dashboards(datasources, queries, datasets)
+    {:ok, processors} = Provisioning.load_processors()
+    {:ok, dashboards} = Provisioning.load_dashboards(datasources, queries, processors)
 
     assert get_in(datasources, ["eu-charge", "_meta", "folder"]) == "real"
     assert get_in(queries, ["queue_size", "_meta", "folder"]) == "applications/queues"
-    assert get_in(datasets, ["queue_default_pending", "_meta", "folder"]) == "applications/queues"
+
+    assert get_in(processors, ["queue_jobs_et", "_meta", "folder"]) ==
+             "applications/queues"
+
     assert get_in(dashboards, ["laravel", "_meta", "folder"]) == "Apps/Ampeco"
   end
 
   test "loads panel dataset legend formats for panel display" do
     {:ok, datasources} = Provisioning.load_datasources()
     {:ok, queries} = Provisioning.load_queries()
-    {:ok, datasets} = Provisioning.load_datasets()
-    {:ok, dashboards} = Provisioning.load_dashboards(datasources, queries, datasets)
+    {:ok, processors} = Provisioning.load_processors()
+    {:ok, dashboards} = Provisioning.load_dashboards(datasources, queries, processors)
 
     refute get_in(dashboards, ["queue", "datasets", "queue_default_pending", "label"])
 
@@ -33,25 +36,34 @@ defmodule Observe.QueryGraphTest do
     assert get_in(panel, ["datasets", Access.at(2), "legend", "format"]) == "Low"
   end
 
-  test "infers dashboard query refs from dataset sources" do
+  test "infers dashboard query refs from direct dataset queries" do
     {:ok, datasources} = Provisioning.load_datasources()
     {:ok, queries} = Provisioning.load_queries()
-    {:ok, datasets} = Provisioning.load_datasets()
-    {:ok, dashboards} = Provisioning.load_dashboards(datasources, queries, datasets)
+    {:ok, processors} = Provisioning.load_processors()
+    {:ok, dashboards} = Provisioning.load_dashboards(datasources, queries, processors)
 
     assert get_in(dashboards, ["queue", "queryRefs"]) == []
     assert get_in(dashboards, ["queue", "queries", "queue_size"])
     assert get_in(dashboards, ["queue", "queries", "queue_jobs_et"])
 
-    assert get_in(dashboards, ["queue", "plan", :queries, "queue_default_jobs_et", "query_ref"]) ==
+    assert get_in(dashboards, [
+             "queue",
+             "plan",
+             :queries,
+             "queue_default_jobs_et__queue_jobs_et",
+             "query_ref"
+           ]) ==
              "queue_jobs_et"
+
+    assert get_in(dashboards, ["queue", "plan", :queries, "queue_default_jobs_et", "from"]) ==
+             "queue_default_jobs_et__queue_jobs_et"
   end
 
   test "loads panel legend format for visualization-specific series names" do
     {:ok, datasources} = Provisioning.load_datasources()
     {:ok, queries} = Provisioning.load_queries()
-    {:ok, datasets} = Provisioning.load_datasets()
-    {:ok, dashboards} = Provisioning.load_dashboards(datasources, queries, datasets)
+    {:ok, processors} = Provisioning.load_processors()
+    {:ok, dashboards} = Provisioning.load_dashboards(datasources, queries, processors)
 
     panel =
       dashboards
@@ -67,8 +79,8 @@ defmodule Observe.QueryGraphTest do
   test "queue tenant variable is scoped by selected deployment" do
     {:ok, datasources} = Provisioning.load_datasources()
     {:ok, queries} = Provisioning.load_queries()
-    {:ok, datasets} = Provisioning.load_datasets()
-    {:ok, dashboards} = Provisioning.load_dashboards(datasources, queries, datasets)
+    {:ok, processors} = Provisioning.load_processors()
+    {:ok, dashboards} = Provisioning.load_dashboards(datasources, queries, processors)
 
     assert get_in(dashboards, ["queue", "variables", "tenant", "metric"]) ==
              ~s(app_queue_job_count{deployment="${vars.deployment}"})
@@ -80,8 +92,8 @@ defmodule Observe.QueryGraphTest do
   test "dashboard variables preserve yaml definition order" do
     {:ok, datasources} = Provisioning.load_datasources()
     {:ok, queries} = Provisioning.load_queries()
-    {:ok, datasets} = Provisioning.load_datasets()
-    {:ok, dashboards} = Provisioning.load_dashboards(datasources, queries, datasets)
+    {:ok, processors} = Provisioning.load_processors()
+    {:ok, dashboards} = Provisioning.load_dashboards(datasources, queries, processors)
 
     assert dashboards
            |> get_in(["queue", "variables"])
@@ -98,9 +110,9 @@ defmodule Observe.QueryGraphTest do
   test "skips invalid dashboards instead of failing the full dashboard load" do
     {:ok, datasources} = Provisioning.load_datasources()
     {:ok, queries} = Provisioning.load_queries()
-    {:ok, datasets} = Provisioning.load_datasets()
+    {:ok, processors} = Provisioning.load_processors()
 
-    assert {:ok, dashboards} = Provisioning.load_dashboards(datasources, queries, datasets)
+    assert {:ok, dashboards} = Provisioning.load_dashboards(datasources, queries, processors)
     assert Map.has_key?(dashboards, "laravel")
     refute Map.has_key?(dashboards, "error-explorer")
   end
@@ -119,29 +131,30 @@ defmodule Observe.QueryGraphTest do
           "request" => %{"query" => "avg(rate(cpu[5m])) by (${inputs.group_by})"}
         }
       },
-      "datasets" => %{
+      "processors" => %{
         "node_cpu" => %{
           "source" => "query",
           "query" => %{"name" => "cpu_load", "inputs" => %{"datasource" => "prometheus"}}
         },
         "hot_nodes" => %{
-          "source" => "dataset",
-          "dataset" => %{"name" => "node_cpu"},
+          "source" => "processor",
+          "processor" => %{"name" => "node_cpu"},
           "transform" => [%{"filter" => %{"field" => "value", "gte" => 75}}]
         }
       },
+      "datasets" => %{"hot_nodes" => %{"processor" => "hot_nodes"}},
       "panels" => [%{"id" => "cpu", "type" => "table", "dataset" => "hot_nodes"}]
     }
 
     assert {:ok, plan} = QueryGraph.plan(dashboard, %{"eu-charge" => %{}})
 
-    assert plan.queries["node_cpu"]["query_ref"] == "cpu_load"
-    assert plan.queries["node_cpu"]["datasource"] == "prometheus"
-    assert get_in(plan.queries, ["node_cpu", "request", "query"]) =~ "by (instance)"
-    assert plan.queries["hot_nodes"]["from"] == "node_cpu"
+    assert plan.queries["hot_nodes__node_cpu"]["query_ref"] == "cpu_load"
+    assert plan.queries["hot_nodes__node_cpu"]["datasource"] == "prometheus"
+    assert get_in(plan.queries, ["hot_nodes__node_cpu", "request", "query"]) =~ "by (instance)"
+    assert plan.queries["hot_nodes"]["from"] == "hot_nodes__node_cpu"
   end
 
-  test "expands provisioned dataset template inputs" do
+  test "expands processor inputs" do
     dashboard = %{
       "variables" => %{},
       "datasources" => %{"prometheus" => %{"ref" => "eu-p"}},
@@ -152,12 +165,17 @@ defmodule Observe.QueryGraphTest do
           "request" => %{"query" => "queue{deployment=\"${inputs.deployment}\"}"}
         }
       },
-      "datasets" => %{
+      "processors" => %{
         "queue_default" => %{
-          "_input_schema" => %{"deployment" => %{}},
-          "inputs" => %{"deployment" => "prod"},
+          "inputs" => %{"deployment" => %{}},
           "source" => "query",
           "query" => %{"name" => "queue", "inputs" => %{"deployment" => "${inputs.deployment}"}}
+        }
+      },
+      "datasets" => %{
+        "queue_default" => %{
+          "processor" => "queue_default",
+          "inputs" => %{"deployment" => "prod"}
         }
       },
       "panels" => [%{"id" => "queue", "type" => "table", "dataset" => "queue_default"}]
@@ -170,6 +188,93 @@ defmodule Observe.QueryGraphTest do
              "queue{deployment=\"prod\"}"
   end
 
+  test "expands query processors with transforms through an internal source node" do
+    dashboard = %{
+      "variables" => %{},
+      "datasources" => %{"prometheus" => %{"ref" => "eu-p"}},
+      "queries" => %{
+        "execution_time" => %{"datasource" => "prometheus", "request" => %{"query" => "rate"}}
+      },
+      "processors" => %{
+        "execution_time_seconds" => %{
+          "query" => "execution_time",
+          "transform" => [%{"math" => %{"field" => "value", "divide" => 1000}}]
+        }
+      },
+      "datasets" => %{"execution_time_seconds" => %{"processor" => "execution_time_seconds"}},
+      "panels" => [
+        %{"id" => "execution-time", "type" => "table", "dataset" => "execution_time_seconds"}
+      ]
+    }
+
+    assert {:ok, plan} = QueryGraph.plan(dashboard, %{"eu-p" => %{}})
+    assert plan.queries["execution_time_seconds__execution_time"]["query_ref"] == "execution_time"
+
+    assert plan.queries["execution_time_seconds"]["from"] ==
+             "execution_time_seconds__execution_time"
+  end
+
+  test "expands direct query datasets" do
+    dashboard = %{
+      "variables" => %{},
+      "datasources" => %{"prometheus" => %{"ref" => "eu-p"}},
+      "queries" => %{
+        "queue" => %{
+          "inputs" => %{"deployment" => %{}, "state" => %{}},
+          "datasource" => "prometheus",
+          "request" => %{
+            "query" => "queue{deployment=\"${inputs.deployment}\",state=\"${inputs.state}\"}"
+          }
+        }
+      },
+      "datasets" => %{
+        "queue_pending" => %{
+          "query" => "queue",
+          "inputs" => %{"deployment" => "prod", "state" => "pending"}
+        }
+      },
+      "panels" => [%{"id" => "queue", "type" => "table", "dataset" => "queue_pending"}]
+    }
+
+    assert {:ok, plan} = QueryGraph.plan(dashboard, %{"eu-p" => %{}})
+    assert get_in(plan.queries, ["queue_pending", "query_ref"]) == "queue"
+    assert get_in(plan.queries, ["queue_pending", "inputs", "deployment"]) == "prod"
+
+    assert get_in(plan.queries, ["queue_pending", "request", "query"]) ==
+             "queue{deployment=\"prod\",state=\"pending\"}"
+  end
+
+  test "rejects datasets that define both query and processor" do
+    dashboard = %{
+      "variables" => %{},
+      "datasources" => %{"prometheus" => %{"ref" => "eu-p"}},
+      "queries" => %{
+        "cpu" => %{"datasource" => "prometheus", "request" => %{"query" => "up"}}
+      },
+      "processors" => %{"cpu" => %{"query" => "cpu"}},
+      "datasets" => %{"cpu" => %{"query" => "cpu", "processor" => "cpu"}},
+      "panels" => [%{"id" => "cpu", "type" => "table", "dataset" => "cpu"}]
+    }
+
+    assert {:error, reason} = QueryGraph.plan(dashboard, %{"eu-p" => %{}})
+    assert reason =~ "cannot define both query and processor"
+  end
+
+  test "rejects direct query datasets with normalization config" do
+    dashboard = %{
+      "variables" => %{},
+      "datasources" => %{"prometheus" => %{"ref" => "eu-p"}},
+      "queries" => %{
+        "cpu" => %{"datasource" => "prometheus", "request" => %{"query" => "up"}}
+      },
+      "datasets" => %{"cpu" => %{"query" => "cpu", "no_value" => 0}},
+      "panels" => [%{"id" => "cpu", "type" => "table", "dataset" => "cpu"}]
+    }
+
+    assert {:error, reason} = QueryGraph.plan(dashboard, %{"eu-p" => %{}})
+    assert reason =~ "cannot define normalization without a processor"
+  end
+
   test "rejects derived query templates used as datasets" do
     dashboard = %{
       "variables" => %{},
@@ -178,7 +283,8 @@ defmodule Observe.QueryGraphTest do
         "cpu_load" => %{"datasource" => "prometheus", "request" => %{"query" => "up"}},
         "hot_nodes" => %{"from" => "cpu_load", "transform" => []}
       },
-      "datasets" => %{"hot_nodes" => %{"query" => "hot_nodes"}},
+      "processors" => %{"hot_nodes" => %{"query" => "hot_nodes"}},
+      "datasets" => %{"hot_nodes" => %{"processor" => "hot_nodes"}},
       "panels" => [%{"id" => "cpu", "type" => "table", "dataset" => "hot_nodes"}]
     }
 
@@ -216,9 +322,7 @@ defmodule Observe.QueryGraphTest do
           "request" => %{"query" => "metric{filter=\"${inputs.filter}\"}"}
         }
       },
-      "datasets" => %{
-        "metric" => %{"source" => "query", "query" => %{"name" => "metric"}}
-      },
+      "datasets" => %{"metric" => %{"query" => "metric"}},
       "panels" => [%{"id" => "metric", "type" => "table", "dataset" => "metric"}]
     }
 
@@ -237,7 +341,7 @@ defmodule Observe.QueryGraphTest do
           "request" => %{"query" => "up"}
         }
       },
-      "datasets" => %{
+      "processors" => %{
         "cpu" => %{
           "source" => "query",
           "query" => %{
@@ -246,6 +350,7 @@ defmodule Observe.QueryGraphTest do
           }
         }
       },
+      "datasets" => %{"cpu" => %{"processor" => "cpu"}},
       "panels" => [%{"id" => "cpu", "type" => "table", "dataset" => "cpu"}]
     }
 
@@ -253,7 +358,7 @@ defmodule Observe.QueryGraphTest do
     assert reason =~ "query cpu_load received unknown input extra"
   end
 
-  test "rejects unknown dataset template inputs" do
+  test "rejects unknown processor inputs" do
     dashboard = %{
       "variables" => %{},
       "datasources" => %{"prometheus" => %{"ref" => "eu-p"}},
@@ -264,10 +369,9 @@ defmodule Observe.QueryGraphTest do
           "request" => %{"query" => "up"}
         }
       },
-      "datasets" => %{
+      "processors" => %{
         "cpu" => %{
-          "_input_schema" => %{"datasource" => %{}},
-          "inputs" => %{"datasource" => "prometheus", "extra" => "unused"},
+          "inputs" => %{"datasource" => %{}},
           "source" => "query",
           "query" => %{
             "name" => "cpu_load",
@@ -275,11 +379,17 @@ defmodule Observe.QueryGraphTest do
           }
         }
       },
+      "datasets" => %{
+        "cpu" => %{
+          "processor" => "cpu",
+          "inputs" => %{"datasource" => "prometheus", "extra" => "unused"}
+        }
+      },
       "panels" => [%{"id" => "cpu", "type" => "table", "dataset" => "cpu"}]
     }
 
     assert {:error, reason} = QueryGraph.plan(dashboard, %{"eu-p" => %{}})
-    assert reason =~ "dataset cpu received unknown input extra"
+    assert reason =~ "processor cpu received unknown input extra"
   end
 
   test "maps query inputs from dashboard variable formats" do
@@ -303,8 +413,10 @@ defmodule Observe.QueryGraphTest do
       },
       "datasets" => %{
         "metric_check" => %{
-          "query" => "metric",
-          "inputs" => %{"target" => "${vars.data.formats.check}"}
+          "query" => %{
+            "name" => "metric",
+            "inputs" => %{"target" => "${vars.data.formats.check}"}
+          }
         }
       },
       "panels" => [%{"id" => "metric", "type" => "table", "dataset" => "metric_check"}]

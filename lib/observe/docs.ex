@@ -28,12 +28,12 @@ defmodule Observe.Docs do
       summary: "What Observe is and how the model differs from Grafana.",
       sections: [
         text(
-          "Observe is a YAML-provisioned observability dashboard system built around reusable query templates and concrete datasets. The key design rule is simple: queries describe source requests, datasets hold executable data nodes, and panels consume datasets."
+          "Observe is a YAML-provisioned observability dashboard system built around query templates, reusable processors, and concrete datasets. The key design rule is simple: queries describe source requests, processors shape or compose data, datasets instantiate a query or processor with concrete inputs, and panels consume datasets."
         ),
         bullets("Core ideas", [
           "Queries are reusable source templates that can define inputs.",
-          "A source dataset instantiates a query template with concrete inputs.",
-          "A derived dataset transforms the result of another dataset.",
+          "Processors instantiate queries or other processors and apply math, filters, transforms, and normalization.",
+          "Datasets instantiate one query or one processor with concrete dashboard inputs.",
           "Panels reference datasets by name and never own source queries.",
           "Variables can resolve multiple datasource aliases from one selection."
         ]),
@@ -63,9 +63,7 @@ defmodule Observe.Docs do
 
         datasets:
           request_rate:
-            source: query
-            query:
-              name: request_rate
+            query: request_rate
 
         panels:
           - id: request-rate
@@ -92,8 +90,8 @@ defmodule Observe.Docs do
           ["config/datasources/**/*.yml", "Same as .yaml."],
           ["config/queries/**/*.yaml", "Provision reusable source query templates recursively."],
           ["config/queries/**/*.yml", "Same as .yaml."],
-          ["config/datasets/**/*.yaml", "Provision reusable dataset templates recursively."],
-          ["config/datasets/**/*.yml", "Same as .yaml."],
+          ["config/processors/**/*.yaml", "Provision reusable processor templates recursively."],
+          ["config/processors/**/*.yml", "Same as .yaml."],
           ["config/dashboards/**/*.yaml", "Provision dashboards recursively."],
           ["config/dashboards/**/*.yml", "Same as .yaml."]
         ]),
@@ -104,7 +102,7 @@ defmodule Observe.Docs do
           ],
           [
             "YAML folder",
-            "Dashboards, query collections, and dataset collections use metadata.folder. Datasource files use top-level metadata.folder, and individual datasource entries may override it with folder."
+            "Dashboards, query collections, and processor collections use metadata.folder. Datasource files use top-level metadata.folder, and individual datasource entries may override it with folder."
           ],
           [
             "Filesystem fallback",
@@ -124,7 +122,7 @@ defmodule Observe.Docs do
           [
             "kind",
             "Yes",
-            "Document kind. Supported values are Datasources, QueryCollection, DatasetCollection, and Dashboard."
+            "Document kind. Supported values are Datasources, QueryCollection, ProcessorCollection, and Dashboard."
           ]
         ]),
         table("Dashboard top-level keys", ["Key", "Required", "Description"], [
@@ -143,15 +141,11 @@ defmodule Observe.Docs do
           [
             "queryRefs",
             "No",
-            "Legacy/direct-query refs. Dataset-backed dashboards infer query refs from dataset sources."
+            "Legacy/direct-query refs. Processor-backed dashboards infer query refs from processor sources."
           ],
-          [
-            "datasetRefs",
-            "No",
-            "Map of dashboard-local dataset names to provisioned dataset templates."
-          ],
-          ["datasets", "No", "Concrete source or derived datasets consumed by panels."],
-          ["panels", "No", "Read-only visualization definitions referencing query datasets."]
+          ["processors", "No", "Dashboard-local reusable processor definitions."],
+          ["datasets", "No", "Concrete processor instances consumed by panels."],
+          ["panels", "No", "Read-only visualization definitions referencing datasets."]
         ]),
         callout(
           "Folder metadata",
@@ -496,10 +490,10 @@ defmodule Observe.Docs do
       slug: "queries",
       title: "Queries",
       summary:
-        "Source query templates, dataset derivation, graph dependencies, and validation rules.",
+        "Source query templates, processor derivation, graph dependencies, and validation rules.",
       sections: [
         text(
-          "Queries are reusable source templates. Datasets turn those templates into executable source datasets, or derive new datasets from existing datasets with transforms."
+          "Queries are reusable source templates. Datasets can instantiate a query directly for simple cases. Processors turn query templates into reusable shaped nodes, or derive new nodes from existing processors with transforms."
         ),
         table("Source query options", ["Option", "Required", "Description"], [
           ["description", "Yes", "Human-readable explanation of what the query returns."],
@@ -511,11 +505,11 @@ defmodule Observe.Docs do
           ["required", "No", "Set to false to make a declared input optional."],
           ["default", "No", "Default value used when the caller omits the input."]
         ]),
-        table("Derived dataset options", ["Option", "Required", "Description"], [
-          ["from", "Yes", "Parent dataset name whose data should be transformed."],
-          ["transform", "No", "Ordered list of transforms applied to the parent dataset."]
+        table("Derived processor options", ["Option", "Required", "Description"], [
+          ["from", "Yes", "Parent processor name whose data should be transformed."],
+          ["transform", "No", "Ordered list of transforms applied to the parent processor."]
         ]),
-        code("Source query and derived dataset", """
+        code("Source query and derived processor", """
         queries:
           cpu_raw:
             datasource: cloudwatch
@@ -525,15 +519,15 @@ defmodule Observe.Docs do
               period: 60
               stat: Average
 
-        datasets:
+        processors:
           cpu_raw:
             source: query
             query:
               name: cpu_raw
 
           high_cpu:
-            source: dataset
-            dataset:
+            source: processor
+            processor:
               name: cpu_raw
             transform:
               - filter:
@@ -563,7 +557,6 @@ defmodule Observe.Docs do
 
         datasets:
           check_panel_data:
-            source: query
             query:
               name: check_metric
               inputs:
@@ -583,50 +576,37 @@ defmodule Observe.Docs do
               interval: 1m
               query: max(app_queue_${inputs.priority}_${inputs.state}_size{deployment="${inputs.deployment}"}) by (deployment)
 
-        # Dataset collection
-        datasets:
-          queue_pending:
-            inputs:
-              deployment: {}
-              priority: {}
-            source: query
-            query:
-              name: queue
-              inputs:
-                deployment: ${inputs.deployment}
-                priority: ${inputs.priority}
-                state: pending
-
         # Dashboard
-        datasetRefs:
+        datasets:
           queue_high_pending:
-            dataset: queue_pending
+            query: queue
             inputs:
               deployment: ${vars.deployment}
               priority: high
+              state: pending
         """),
         callout(
           "Parameterized queries",
-          "Dataset inputs can be interpolated anywhere in a source request, including metric names. Use this when one query template should produce many concrete datasets."
+          "Processor and dataset inputs can be interpolated anywhere in a source request, including metric names. Use this when one query template should produce many concrete datasets."
         ),
         table("Validation rules", ["Rule", "Reason"], [
           [
-            "A dataset source must be query or dataset.",
-            "Keeps source and derived dataset semantics explicit and excludes direct datasource access."
+            "A processor source must be query or processor.",
+            "Keeps source and derived processor semantics explicit and excludes direct datasource access."
           ],
           [
             "A source query must reference a known datasource alias.",
             "Prevents runtime ambiguity."
           ],
           [
-            "A derived dataset must reference a known parent dataset.",
+            "A derived processor must reference a known parent processor.",
             "Ensures the graph can be planned."
           ],
           ["Cycles are rejected.", "Execution requires a directed acyclic graph."]
         ]),
         callout(
           "Performance intent",
-          "If multiple derived datasets depend on the same source dataset, the source dataset executes once and feeds all derived datasets."
+          "If multiple processors depend on the same source processor in an execution graph, the source node executes once and feeds derived nodes."
         )
       ]
     }
@@ -644,6 +624,7 @@ defmodule Observe.Docs do
         table("Supported transforms", ["Transform", "Description"], [
           ["filter", "Keep rows matching comparison predicates."],
           ["select", "Keep only selected fields."],
+          ["math", "Apply simple numeric operations to a row field."],
           ["sort", "Sort rows by one field."],
           ["limit", "Keep the first N rows."]
         ]),
@@ -668,6 +649,16 @@ defmodule Observe.Docs do
         transform:
           - select:
               fields: [timestamp, service, status, message]
+        """),
+        table("math options", ["Option", "Required", "Description"], [
+          ["field", "Yes", "Numeric row field to update."],
+          ["divide", "No", "Divide the field value by this non-zero number."]
+        ]),
+        code("math divide", """
+        transform:
+          - math:
+              field: value
+              divide: 1000
         """),
         table("sort options", ["Option", "Required", "Description"], [
           ["field", "Yes", "Field to sort by."],
@@ -763,20 +754,16 @@ defmodule Observe.Docs do
 
         datasets:
           queue_default_pending:
-            source: query
-            query:
-              name: queue
-              inputs:
-                priority: default
-                state: pending
+            query: queue
+            inputs:
+              priority: default
+              state: pending
 
           queue_low_pending:
-            source: query
-            query:
-              name: queue
-              inputs:
-                priority: low
-                state: pending
+            query: queue
+            inputs:
+              priority: low
+              state: pending
 
         panels:
           - id: queue-pending
@@ -845,9 +832,9 @@ defmodule Observe.Docs do
           "Load dashboard YAML files.",
           "Resolve default variable values.",
           "Interpolate datasource refs such as ${vars.region}-p.",
-          "Validate source queries and derived dataset shapes.",
+          "Validate source queries and derived processor shapes.",
           "Validate panel dataset references.",
-          "Detect dataset graph cycles.",
+          "Detect processor graph cycles.",
           "Build execution order.",
           "Execute source queries and transforms.",
           "Render panels from datasets."
@@ -925,15 +912,15 @@ defmodule Observe.Docs do
               query:
                 match_all: {}
 
-        datasets:
+        processors:
           logs_raw:
             source: query
             query:
               name: logs_raw
 
           error_logs:
-            source: dataset
-            dataset:
+            source: processor
+            processor:
               name: logs_raw
             transform:
               - filter:
@@ -942,6 +929,10 @@ defmodule Observe.Docs do
               - select:
                   fields: [timestamp, service, status, message]
               - limit: 25
+
+        datasets:
+          error_logs:
+            processor: error_logs
 
         panels:
           - id: error-logs

@@ -98,7 +98,7 @@ defmodule Observe.Store do
         state
 
       {:error, reason} ->
-        %{datasources: %{}, queries: %{}, datasets: %{}, dashboards: %{}, error: reason}
+        %{datasources: %{}, queries: %{}, processors: %{}, dashboards: %{}, error: reason}
     end
   end
 

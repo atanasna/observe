@@ -19,7 +19,8 @@ defmodule Observe.QueryGraph do
 
     with {:ok, datasource_aliases} <-
            resolve_datasource_aliases(dashboard, provisioned_datasources, vars),
-         {:ok, queries} <- executable_queries(dashboard, datasource_aliases, vars),
+         {:ok, queries, dataset_configs} <-
+           executable_queries(dashboard, datasource_aliases, vars),
          {:ok, order} <- topo_sort(queries),
          :ok <- validate_panels(Map.get(dashboard, "panels", []), queries) do
       {:ok,
@@ -29,7 +30,8 @@ defmodule Observe.QueryGraph do
          datasource_aliases: datasource_aliases,
          query_order: order,
          queries: queries,
-         datasets: Map.get(dashboard, "datasets", %{}),
+         processors: Map.get(dashboard, "processors", %{}),
+         datasets: dataset_configs,
          panels: Map.get(dashboard, "panels", [])
        }}
     end
@@ -37,175 +39,457 @@ defmodule Observe.QueryGraph do
 
   defp executable_queries(dashboard, datasource_aliases, vars) do
     query_templates = Map.get(dashboard, "queries", %{})
+    processors = Map.get(dashboard, "processors", %{})
     datasets = Map.get(dashboard, "datasets", %{})
 
     if map_size(datasets) == 0 do
-      query_templates
-      |> Variables.interpolate(vars)
-      |> validate_queries(datasource_aliases)
+      with {:ok, queries} <-
+             query_templates
+             |> Variables.interpolate(vars)
+             |> validate_queries(datasource_aliases) do
+        {:ok, queries, %{}}
+      end
     else
-      with {:ok, queries} <- expand_datasets(datasets, query_templates, vars) do
-        validate_queries(queries, datasource_aliases)
+      with {:ok, queries, dataset_configs} <-
+             expand_datasets(datasets, processors, query_templates, vars),
+           {:ok, queries} <- validate_queries(queries, datasource_aliases) do
+        {:ok, queries, dataset_configs}
       end
     end
   end
 
-  defp expand_datasets(datasets, query_templates, vars) do
-    Enum.reduce_while(datasets, {:ok, %{}}, fn {dataset_name, dataset}, {:ok, acc} ->
-      if not is_map(dataset) do
-        {:halt, {:error, "dataset #{dataset_name} must be a map"}}
-      else
-        cond do
-          Map.has_key?(dataset, "source") ->
-            expand_sourced_dataset(dataset_name, dataset, query_templates, vars, acc)
-
-          Map.has_key?(dataset, "query") and derived_dataset?(dataset) ->
-            {:halt, {:error, "dataset #{dataset_name} cannot mix query with from/transform"}}
-
-          Map.has_key?(dataset, "query") ->
-            expand_source_dataset(dataset_name, dataset, query_templates, vars, acc)
-
-          derived_dataset?(dataset) ->
-            expand_derived_dataset(dataset_name, dataset, vars, acc)
-
-          true ->
-            {:halt, {:error, "dataset #{dataset_name} must define query or from/transform"}}
-        end
+  defp expand_datasets(datasets, processors, query_templates, vars) do
+    Enum.reduce_while(datasets, {:ok, %{}, %{}}, fn {dataset_name, dataset},
+                                                    {:ok, queries, configs} ->
+      case expand_dataset(
+             dataset_name,
+             dataset,
+             processors,
+             query_templates,
+             vars,
+             queries,
+             configs
+           ) do
+        {:ok, queries, configs} -> {:cont, {:ok, queries, configs}}
+        {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
   end
 
-  defp expand_sourced_dataset(dataset_name, dataset, query_templates, vars, acc) do
-    case Map.get(dataset, "source") do
-      "query" ->
-        expand_query_sourced_dataset(dataset_name, dataset, query_templates, vars, acc)
+  defp expand_dataset(dataset_name, dataset, processors, query_templates, vars, queries, configs) do
+    cond do
+      not is_map(dataset) ->
+        {:error, "dataset #{dataset_name} must be a map"}
 
-      "dataset" ->
-        expand_dataset_sourced_dataset(dataset_name, dataset, vars, acc)
+      Map.has_key?(dataset, "query") and Map.has_key?(dataset, "processor") ->
+        {:error, "dataset #{dataset_name} cannot define both query and processor"}
+
+      Map.has_key?(dataset, "query") and derived_processor?(dataset) ->
+        {:error, "dataset #{dataset_name} cannot mix query with from/transform"}
+
+      Map.has_key?(dataset, "query") and normalization_processor?(dataset) ->
+        {:error, "dataset #{dataset_name} cannot define normalization without a processor"}
+
+      Map.has_key?(dataset, "query") ->
+        with {:ok, queries, configs, _node} <-
+               expand_query_processor(
+                 dataset_name,
+                 dataset,
+                 %{},
+                 query_templates,
+                 vars,
+                 queries,
+                 configs
+               ) do
+          config = Map.merge(Map.get(configs, dataset_name, %{}), dataset)
+          {:ok, queries, Map.put(configs, dataset_name, config)}
+        end
+
+      processor_ref = dataset_processor_ref(dataset) ->
+        provided_inputs = Map.get(dataset, "inputs", %{})
+
+        with {:ok, queries, configs, _node} <-
+               expand_processor_instance(
+                 dataset_name,
+                 processor_ref,
+                 provided_inputs,
+                 processors,
+                 query_templates,
+                 vars,
+                 queries,
+                 configs,
+                 MapSet.new()
+               ) do
+          config = Map.merge(Map.get(configs, dataset_name, %{}), dataset)
+          {:ok, queries, Map.put(configs, dataset_name, config)}
+        end
+
+      true ->
+        expand_processor(
+          dataset_name,
+          dataset,
+          %{},
+          processors,
+          query_templates,
+          vars,
+          queries,
+          configs,
+          MapSet.new()
+        )
+    end
+  end
+
+  defp dataset_processor_ref(%{"processor" => %{"name" => name}}) when is_binary(name), do: name
+  defp dataset_processor_ref(%{"processor" => name}) when is_binary(name), do: name
+  defp dataset_processor_ref(_dataset), do: nil
+
+  defp expand_processor_instance(
+         node_name,
+         processor_ref,
+         provided_inputs,
+         processors,
+         query_templates,
+         vars,
+         queries,
+         configs,
+         seen
+       ) do
+    cond do
+      not Map.has_key?(processors, processor_ref) ->
+        {:error, "dataset #{node_name} references unknown processor #{inspect(processor_ref)}"}
+
+      MapSet.member?(seen, processor_ref) ->
+        {:error, "processor #{processor_ref} depends on itself"}
+
+      true ->
+        processor = Map.fetch!(processors, processor_ref)
+
+        expand_processor(
+          node_name,
+          processor,
+          provided_inputs,
+          processors,
+          query_templates,
+          vars,
+          queries,
+          Map.put(configs, node_name, processor),
+          MapSet.put(seen, processor_ref)
+        )
+    end
+  end
+
+  defp expand_processor(
+         node_name,
+         processor,
+         provided_inputs,
+         processors,
+         query_templates,
+         vars,
+         queries,
+         configs,
+         seen
+       ) do
+    with {:ok, inputs} <- processor_inputs(node_name, processor, provided_inputs, vars) do
+      cond do
+        Map.has_key?(processor, "source") ->
+          expand_sourced_processor(
+            node_name,
+            processor,
+            inputs,
+            processors,
+            query_templates,
+            vars,
+            queries,
+            configs,
+            seen
+          )
+
+        Map.has_key?(processor, "query") and Map.has_key?(processor, "from") ->
+          {:error, "processor #{node_name} cannot mix query with from"}
+
+        Map.has_key?(processor, "query") ->
+          expand_query_processor(
+            node_name,
+            processor,
+            inputs,
+            query_templates,
+            vars,
+            queries,
+            configs
+          )
+
+        derived_processor?(processor) ->
+          expand_derived_processor(
+            node_name,
+            processor,
+            inputs,
+            processors,
+            query_templates,
+            vars,
+            queries,
+            configs,
+            seen
+          )
+
+        true ->
+          {:error, "processor #{node_name} must define query or from/transform"}
+      end
+    end
+  end
+
+  defp expand_sourced_processor(
+         node_name,
+         processor,
+         inputs,
+         processors,
+         query_templates,
+         vars,
+         queries,
+         configs,
+         seen
+       ) do
+    case Map.get(processor, "source") do
+      "query" ->
+        with {:ok, query_ref, query_inputs} <- source_query(node_name, processor, vars, inputs) do
+          expand_query_processor(
+            node_name,
+            processor
+            |> Map.take(["transform"])
+            |> Map.merge(%{"query" => query_ref, "inputs" => query_inputs}),
+            %{},
+            query_templates,
+            vars,
+            queries,
+            configs
+          )
+        end
+
+      source when source in ["processor", "dataset"] ->
+        expand_processor_sourced_processor(
+          node_name,
+          processor,
+          inputs,
+          processors,
+          query_templates,
+          vars,
+          queries,
+          configs,
+          seen
+        )
 
       source ->
-        {:halt, {:error, "dataset #{dataset_name} has unsupported source #{inspect(source)}"}}
+        {:error, "processor #{node_name} has unsupported source #{inspect(source)}"}
     end
   end
 
-  defp expand_query_sourced_dataset(dataset_name, dataset, query_templates, vars, acc) do
-    with {:ok, dataset_inputs} <- dataset_inputs(dataset_name, dataset, vars),
-         {:ok, query_ref, provided_inputs} <-
-           source_query(dataset_name, dataset, vars, dataset_inputs) do
-      expand_source_dataset(
-        dataset_name,
-        %{"query" => query_ref, "inputs" => provided_inputs},
-        query_templates,
-        vars,
-        acc
-      )
-    else
-      {:error, reason} -> {:halt, {:error, reason}}
+  defp expand_processor_sourced_processor(
+         node_name,
+         processor,
+         inputs,
+         processors,
+         query_templates,
+         vars,
+         queries,
+         configs,
+         seen
+       ) do
+    with {:ok, parent_ref, parent_inputs} <- source_processor(node_name, processor, vars, inputs) do
+      parent_node = parent_node_name(node_name, parent_ref)
+
+      with {:ok, queries, configs, from} <-
+             expand_processor_instance(
+               parent_node,
+               parent_ref,
+               parent_inputs,
+               processors,
+               query_templates,
+               vars,
+               queries,
+               configs,
+               seen
+             ) do
+        query =
+          processor
+          |> Variables.interpolate(vars, inputs)
+          |> Map.take(["transform"])
+          |> Map.put("from", from)
+          |> Map.put("kind", "derived")
+
+        {:ok, Map.put(queries, node_name, query), configs, node_name}
+      end
     end
   end
 
-  defp expand_dataset_sourced_dataset(dataset_name, dataset, vars, acc) do
-    with {:ok, dataset_inputs} <- dataset_inputs(dataset_name, dataset, vars),
-         {:ok, from} <- source_dataset(dataset_name, dataset, vars, dataset_inputs) do
-      query =
-        dataset
-        |> Variables.interpolate(vars, dataset_inputs)
-        |> Map.take(["transform"])
-        |> Map.put("from", from)
-        |> Map.put("kind", "derived")
-
-      {:cont, {:ok, Map.put(acc, dataset_name, query)}}
-    else
-      {:error, reason} -> {:halt, {:error, reason}}
-    end
-  end
-
-  defp source_query(dataset_name, dataset, vars, dataset_inputs) do
-    query = dataset |> Map.get("query", %{}) |> Variables.interpolate(vars, dataset_inputs)
-    query_ref = Map.get(query, "name")
+  defp expand_query_processor(
+         node_name,
+         processor,
+         inputs,
+         query_templates,
+         vars,
+         queries,
+         configs
+       ) do
+    query_ref = query_ref(processor)
+    provided_query_inputs = processor |> query_inputs_map() |> Variables.interpolate(vars, inputs)
 
     cond do
       not is_binary(query_ref) or query_ref == "" ->
-        {:error, "dataset #{dataset_name} source query must define name"}
+        {:error, "processor #{node_name} must define query"}
+
+      not Map.has_key?(query_templates, query_ref) ->
+        {:error, "processor #{node_name} references unknown query #{inspect(query_ref)}"}
+
+      true ->
+        template = Map.fetch!(query_templates, query_ref)
+
+        if derived_processor?(template) do
+          {:error, "processor #{node_name} references derived query #{query_ref}"}
+        else
+          with {:ok, query_inputs} <-
+                 query_inputs(query_ref, template, provided_query_inputs, vars) do
+            query =
+              template
+              |> Map.drop(["inputs"])
+              |> Variables.interpolate(vars, query_inputs)
+              |> Map.put("query_ref", query_ref)
+              |> Map.put("inputs", query_inputs)
+
+            if Map.has_key?(processor, "transform") do
+              source_node = parent_node_name(node_name, query_ref)
+
+              derived_query =
+                processor
+                |> Variables.interpolate(vars, inputs)
+                |> Map.take(["transform"])
+                |> Map.put("from", source_node)
+                |> Map.put("kind", "derived")
+
+              queries =
+                queries
+                |> Map.put(source_node, query)
+                |> Map.put(node_name, derived_query)
+
+              {:ok, queries, configs, node_name}
+            else
+              {:ok, Map.put(queries, node_name, query), configs, node_name}
+            end
+          else
+            {:error, reason} -> {:error, "processor #{node_name}: #{reason}"}
+          end
+        end
+    end
+  end
+
+  defp expand_derived_processor(
+         node_name,
+         processor,
+         inputs,
+         processors,
+         query_templates,
+         vars,
+         queries,
+         configs,
+         seen
+       ) do
+    parent_ref = processor |> Variables.interpolate(vars, inputs) |> Map.get("from")
+
+    cond do
+      not is_binary(parent_ref) or parent_ref == "" ->
+        {:error, "derived processor #{node_name} must define from"}
+
+      Map.has_key?(processors, parent_ref) ->
+        parent_node = parent_node_name(node_name, parent_ref)
+
+        with {:ok, queries, configs, from} <-
+               expand_processor_instance(
+                 parent_node,
+                 parent_ref,
+                 inputs,
+                 processors,
+                 query_templates,
+                 vars,
+                 queries,
+                 configs,
+                 seen
+               ) do
+          query =
+            processor
+            |> Variables.interpolate(vars, inputs)
+            |> Map.take(["transform"])
+            |> Map.put("from", from)
+            |> Map.put("kind", "derived")
+
+          {:ok, Map.put(queries, node_name, query), configs, node_name}
+        end
+
+      true ->
+        query =
+          processor
+          |> Variables.interpolate(vars, inputs)
+          |> Map.take(["from", "transform"])
+          |> Map.put("kind", "derived")
+
+        {:ok, Map.put(queries, node_name, query), configs, node_name}
+    end
+  end
+
+  defp parent_node_name(node_name, parent_ref), do: "#{node_name}__#{parent_ref}"
+
+  defp source_query(node_name, processor, vars, inputs) do
+    query = processor |> Map.get("query", %{}) |> Variables.interpolate(vars, inputs)
+    query_ref = query_ref(%{"query" => query})
+
+    cond do
+      not is_binary(query_ref) or query_ref == "" ->
+        {:error, "processor #{node_name} source query must define name"}
 
       not is_map(Map.get(query, "inputs", %{})) ->
-        {:error, "dataset #{dataset_name} source query inputs must be a map"}
+        {:error, "processor #{node_name} source query inputs must be a map"}
 
       true ->
         {:ok, query_ref, Map.get(query, "inputs", %{})}
     end
   end
 
-  defp source_dataset(dataset_name, dataset, vars, dataset_inputs) do
-    source = dataset |> Map.get("dataset", %{}) |> Variables.interpolate(vars, dataset_inputs)
-    name = Map.get(source, "name")
-
-    if is_binary(name) and name != "" do
-      {:ok, name}
-    else
-      {:error, "dataset #{dataset_name} source dataset must define name"}
-    end
-  end
-
-  defp dataset_inputs(dataset_name, dataset, vars) do
-    input_schema = Map.get(dataset, "_input_schema", %{})
-    provided_inputs = Map.get(dataset, "inputs", %{})
-
-    input_values("dataset", dataset_name, input_schema, provided_inputs, vars)
-  end
-
-  defp expand_source_dataset(dataset_name, dataset, query_templates, vars, acc) do
-    query_ref = Map.get(dataset, "query")
+  defp source_processor(node_name, processor, vars, inputs) do
+    source = processor_source(processor) |> Variables.interpolate(vars, inputs)
+    name = if is_map(source), do: Map.get(source, "name"), else: source
 
     cond do
-      not is_binary(query_ref) or query_ref == "" ->
-        {:halt, {:error, "dataset #{dataset_name} must define query"}}
+      not is_binary(name) or name == "" ->
+        {:error, "processor #{node_name} source processor must define name"}
 
-      not Map.has_key?(query_templates, query_ref) ->
-        {:halt,
-         {:error, "dataset #{dataset_name} references unknown query #{inspect(query_ref)}"}}
+      is_map(source) and not is_map(Map.get(source, "inputs", %{})) ->
+        {:error, "processor #{node_name} source processor inputs must be a map"}
 
       true ->
-        template = Map.fetch!(query_templates, query_ref)
-
-        if derived_dataset?(template) do
-          {:halt, {:error, "dataset #{dataset_name} references derived query #{query_ref}"}}
-        else
-          with {:ok, inputs} <-
-                 query_inputs(query_ref, template, Map.get(dataset, "inputs", %{}), vars) do
-            query =
-              template
-              |> Map.drop(["inputs"])
-              |> Variables.interpolate(vars, inputs)
-              |> Map.put("query_ref", query_ref)
-              |> Map.put("inputs", inputs)
-
-            {:cont, {:ok, Map.put(acc, dataset_name, query)}}
-          else
-            {:error, reason} -> {:halt, {:error, "dataset #{dataset_name}: #{reason}"}}
-          end
-        end
+        {:ok, name, if(is_map(source), do: Map.get(source, "inputs", %{}), else: inputs)}
     end
   end
 
-  defp expand_derived_dataset(dataset_name, dataset, vars, acc) do
-    query = Variables.interpolate(dataset, vars)
-    from = Map.get(query, "from")
+  defp processor_source(%{"processor" => source}), do: source
+  defp processor_source(%{"dataset" => source}), do: source
 
-    if is_binary(from) and from != "" do
-      query =
-        query
-        |> Map.take(["from", "transform"])
-        |> Map.put("kind", "derived")
+  defp query_ref(%{"query" => %{"name" => name}}), do: name
+  defp query_ref(%{"query" => name}) when is_binary(name), do: name
+  defp query_ref(_processor), do: nil
 
-      {:cont, {:ok, Map.put(acc, dataset_name, query)}}
-    else
-      {:halt, {:error, "derived dataset #{dataset_name} must define from"}}
-    end
+  defp query_inputs_map(%{"query" => %{"inputs" => inputs}}) when is_map(inputs), do: inputs
+  defp query_inputs_map(%{"inputs" => inputs}) when is_map(inputs), do: inputs
+  defp query_inputs_map(_processor), do: %{}
+
+  defp processor_inputs(node_name, processor, provided_inputs, vars) do
+    input_schema = Map.get(processor, "inputs", %{})
+
+    input_values("processor", node_name, input_schema, provided_inputs, vars)
   end
 
-  defp derived_dataset?(query) do
+  defp derived_processor?(query) do
     Map.has_key?(query, "from") or Map.has_key?(query, "transform")
+  end
+
+  defp normalization_processor?(query) do
+    Map.has_key?(query, "no_value") or Map.has_key?(query, "fill_missing")
   end
 
   defp query_inputs(query_ref, query, provided_inputs, vars) do
@@ -304,7 +588,7 @@ defmodule Observe.QueryGraph do
           if is_binary(from) do
             {:cont, {:ok, Map.put(acc, name, Map.put(query, "kind", "derived"))}}
           else
-            {:halt, {:error, "derived dataset #{name} must define from"}}
+            {:halt, {:error, "derived processor #{name} must define from"}}
           end
 
         true ->

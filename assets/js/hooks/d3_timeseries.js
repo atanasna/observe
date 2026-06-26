@@ -55,7 +55,19 @@ export const D3Timeseries = {
     this.el.classList.toggle("bg-[#11111b]", fullscreen)
 
     const controls = document.createElement("div")
-    controls.className = "mb-2 flex items-center justify-end gap-1.5"
+    controls.className = "mb-2 flex items-center justify-between gap-2"
+
+    const title = document.createElement("div")
+    title.className = "min-w-0 truncate text-sm font-semibold text-[#cdd6f4]"
+    title.textContent = this.el.dataset.title || "Timeseries"
+
+    const description = this.el.dataset.description
+    if (description) {
+      title.title = description
+    }
+
+    const actions = document.createElement("div")
+    actions.className = "flex shrink-0 items-center justify-end gap-1.5"
 
     const resetZoomButton = iconButton({
       label: "Reset zoom",
@@ -68,7 +80,7 @@ export const D3Timeseries = {
     resetZoomButton.classList.toggle("cursor-not-allowed", !globalZoomDomain)
     resetZoomButton.classList.toggle("opacity-45", !globalZoomDomain)
     resetZoomButton.addEventListener("click", () => setGlobalZoomDomain(null))
-    controls.appendChild(resetZoomButton)
+    actions.appendChild(resetZoomButton)
 
     const legendButton = iconButton({
       label: this.legendVisible ? "Hide legend" : "Show legend",
@@ -82,7 +94,7 @@ export const D3Timeseries = {
       this.legendVisible = !this.legendVisible
       this.render()
     })
-    controls.appendChild(legendButton)
+    actions.appendChild(legendButton)
 
     const fullscreenButton = iconButton({
       label: fullscreen ? "Exit fullscreen" : "Fullscreen",
@@ -96,7 +108,9 @@ export const D3Timeseries = {
         this.el.requestFullscreen()
       }
     })
-    controls.appendChild(fullscreenButton)
+    actions.appendChild(fullscreenButton)
+    controls.appendChild(title)
+    controls.appendChild(actions)
     this.el.appendChild(controls)
 
     if (!payload.series || payload.series.length === 0) {

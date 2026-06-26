@@ -70,7 +70,7 @@ defmodule Observe.ExecutorTest do
     assert :ok = Task.await(task)
   end
 
-  test "runs only requested source datasets" do
+  test "runs only requested source nodes" do
     assert {:ok, %{datasets: datasets}} =
              Executor.run(source_dashboard(), %{}, %{
                datasources: %{"fake-prometheus" => %{"type" => "prometheus"}},
@@ -81,7 +81,7 @@ defmodule Observe.ExecutorTest do
     assert Map.keys(datasets) == ["alpha"]
   end
 
-  test "includes parents needed by requested derived datasets" do
+  test "includes parents needed by requested derived nodes" do
     dashboard = %{
       "variables" => %{},
       "datasources" => %{"prometheus" => %{"ref" => "fake-prometheus"}},
@@ -106,16 +106,17 @@ defmodule Observe.ExecutorTest do
     assert datasets["high_alpha"] == [%{"value" => 2}]
   end
 
-  test "normalizes no-value samples from dataset config" do
+  test "normalizes no-value samples from processor config" do
     dashboard = %{
       "variables" => %{},
       "datasources" => %{"prometheus" => %{"ref" => "fake-prometheus"}},
       "queries" => %{
         "execution_time" => %{"datasource" => "prometheus", "request" => %{"query" => "query"}}
       },
-      "datasets" => %{
+      "processors" => %{
         "queue_execution_time" => %{"query" => "execution_time", "no_value" => 0}
       },
+      "datasets" => %{"queue_execution_time" => %{"processor" => "queue_execution_time"}},
       "panels" => [
         %{"id" => "execution-time", "type" => "timeseries", "dataset" => "queue_execution_time"}
       ]
@@ -138,7 +139,7 @@ defmodule Observe.ExecutorTest do
     assert Enum.map(rows, & &1["value"]) == [0, 0, 0, 0, 12.5]
   end
 
-  test "fills missing samples from dataset config and query interval" do
+  test "fills missing samples from processor config and query interval" do
     dashboard = %{
       "variables" => %{},
       "datasources" => %{"prometheus" => %{"ref" => "fake-prometheus"}},
@@ -148,9 +149,10 @@ defmodule Observe.ExecutorTest do
           "request" => %{"query" => "query", "range" => true, "interval" => "1m"}
         }
       },
-      "datasets" => %{
+      "processors" => %{
         "queue_execution_time" => %{"query" => "execution_time", "fill_missing" => 0}
       },
+      "datasets" => %{"queue_execution_time" => %{"processor" => "queue_execution_time"}},
       "panels" => [
         %{"id" => "execution-time", "type" => "timeseries", "dataset" => "queue_execution_time"}
       ]
@@ -176,6 +178,79 @@ defmodule Observe.ExecutorTest do
              {"b", 60} => 0,
              {"b", 120} => 2,
              {"b", 180} => 0
+           }
+  end
+
+  test "applies math transforms from processor config" do
+    dashboard = %{
+      "variables" => %{},
+      "datasources" => %{"prometheus" => %{"ref" => "fake-prometheus"}},
+      "queries" => %{
+        "execution_time" => %{"datasource" => "prometheus", "request" => %{"query" => "query"}}
+      },
+      "processors" => %{
+        "queue_execution_time" => %{
+          "query" => "execution_time",
+          "transform" => [%{"math" => %{"field" => "value", "divide" => 1000}}]
+        }
+      },
+      "datasets" => %{"queue_execution_time" => %{"processor" => "queue_execution_time"}},
+      "panels" => [
+        %{"id" => "execution-time", "type" => "timeseries", "dataset" => "queue_execution_time"}
+      ]
+    }
+
+    assert {:ok, %{datasets: %{"queue_execution_time" => rows}}} =
+             Executor.run(dashboard, %{}, %{
+               datasources: %{"fake-prometheus" => %{"type" => "prometheus"}},
+               source_dataset: fn "queue_execution_time__execution_time", _query ->
+                 [%{"time" => 1, "value" => 2500}, %{"time" => 2, "value" => "NaN"}]
+               end
+             })
+
+    assert Enum.map(rows, & &1["value"]) == [2.5, "NaN"]
+  end
+
+  test "normalizes transformed query processors using source query interval" do
+    dashboard = %{
+      "variables" => %{},
+      "datasources" => %{"prometheus" => %{"ref" => "fake-prometheus"}},
+      "queries" => %{
+        "execution_time" => %{
+          "datasource" => "prometheus",
+          "request" => %{"query" => "query", "range" => true, "interval" => "1m"}
+        }
+      },
+      "processors" => %{
+        "queue_execution_time" => %{
+          "query" => "execution_time",
+          "no_value" => 0,
+          "fill_missing" => 0,
+          "transform" => [%{"math" => %{"field" => "value", "divide" => 1000}}]
+        }
+      },
+      "datasets" => %{"queue_execution_time" => %{"processor" => "queue_execution_time"}},
+      "panels" => [
+        %{"id" => "execution-time", "type" => "timeseries", "dataset" => "queue_execution_time"}
+      ]
+    }
+
+    assert {:ok, %{datasets: %{"queue_execution_time" => rows}}} =
+             Executor.run(dashboard, %{}, %{
+               datasources: %{"fake-prometheus" => %{"type" => "prometheus"}},
+               time_range: %{from: 60, to: 180},
+               source_dataset: fn "queue_execution_time__execution_time", _query ->
+                 [
+                   %{"tenant" => "a", "time" => 60, "value" => 2500},
+                   %{"tenant" => "a", "time" => 180, "value" => "NaN"}
+                 ]
+               end
+             })
+
+    assert rows_by_series_and_time(rows) == %{
+             {"a", 60} => 2.5,
+             {"a", 120} => 0,
+             {"a", 180} => 0
            }
   end
 

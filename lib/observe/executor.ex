@@ -1,6 +1,6 @@
 defmodule Observe.Executor do
   @moduledoc """
-  Executes query plans with stubbed source datasets and local transforms.
+  Executes query plans with stubbed source nodes and local transforms.
   """
 
   alias Observe.QueryGraph
@@ -122,7 +122,7 @@ defmodule Observe.Executor do
 
   defp normalize_dataset(rows, name, plan, opts) do
     dataset = Map.get(plan.datasets || %{}, name, %{})
-    query = Map.get(plan.queries || %{}, name, %{})
+    query = source_query_for_normalization(name, plan)
 
     rows
     |> normalize_no_value(dataset)
@@ -159,6 +159,16 @@ defmodule Observe.Executor do
       fill_series(rows, timestamps, fill_value)
     else
       _value -> rows
+    end
+  end
+
+  defp source_query_for_normalization(name, plan) do
+    queries = plan.queries || %{}
+    query = Map.get(queries, name, %{})
+
+    case Map.get(query, "from") do
+      parent when is_binary(parent) -> source_query_for_normalization(parent, plan)
+      _parent -> query
     end
   end
 
@@ -239,6 +249,7 @@ defmodule Observe.Executor do
       cond do
         filter = transform["filter"] -> filter_rows(acc, filter)
         select = transform["select"] -> select_rows(acc, select)
+        math = transform["math"] -> math_rows(acc, math)
         sort = transform["sort"] -> sort_rows(acc, sort)
         limit = transform["limit"] -> Enum.take(acc, limit)
         true -> acc
@@ -271,6 +282,19 @@ defmodule Observe.Executor do
   end
 
   defp select_rows(rows, _select), do: rows
+
+  defp math_rows(rows, %{"field" => field, "divide" => divisor})
+       when is_binary(field) and is_number(divisor) and divisor != 0 do
+    Enum.map(rows, fn
+      %{} = row -> Map.update(row, field, nil, &divide_value(&1, divisor))
+      row -> row
+    end)
+  end
+
+  defp math_rows(rows, _math), do: rows
+
+  defp divide_value(value, divisor) when is_number(value), do: value / divisor
+  defp divide_value(value, _divisor), do: value
 
   defp sort_rows(rows, %{"field" => field} = sort) do
     direction = Map.get(sort, "direction", "asc")

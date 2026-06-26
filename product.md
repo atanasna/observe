@@ -4,7 +4,7 @@
 
 Observe is a YAML-provisioned observability dashboard system that fixes a core Grafana limitation: queries are treated as configuration hidden inside panels instead of reusable, composable product primitives.
 
-Observe makes queries first-class citizens. Dashboards consume reusable datasets produced by a query graph. Panels visualize datasets; they do not own the data-fetching logic.
+Observe makes queries first-class citizens. Dashboards consume concrete datasets produced by reusable processors. Panels visualize datasets; they do not own the data-fetching logic.
 
 ## Target User
 
@@ -40,9 +40,9 @@ Observe requirement:
 
 - Queries must be top-level dashboard entities.
 - Queries must be named and reusable.
-- A query must be able to depend on another query.
-- The runtime must build an explicit query DAG.
-- Source queries should execute once and feed multiple derived datasets.
+- A processor must be able to depend on another processor.
+- The runtime must build an explicit processor DAG over query nodes.
+- Source query nodes should execute once and feed multiple derived processors.
 - Panels must reference datasets by name.
 
 ### Problem 2: Provisioning Is Not Expressive Enough
@@ -106,14 +106,14 @@ Observe requirement:
 - Support interpolation with the syntax `${vars.name}`.
 - Support interpolation in datasource refs.
 
-### Queries
+### Queries And Processors
 
 - Support source queries with `datasource` and `request`.
-- Support derived queries with `from` and `transform`.
-- Reject queries that mix source and derived shapes.
+- Support processors that instantiate queries or derive from other processors with `from` and `transform`.
+- Reject processors that mix source and derived shapes.
 - Reject unknown datasource aliases.
-- Reject unknown query dependencies.
-- Reject cycles in the query graph.
+- Reject unknown processor dependencies.
+- Reject cycles in the processor graph.
 - Produce a deterministic execution order.
 
 ### Transforms
@@ -190,7 +190,7 @@ Observe requirement:
 - Query explain/debug views.
 - Dashboard reload controls.
 - Git sync or file watcher.
-- Alert evaluation over query datasets.
+- Alert evaluation over datasets.
 - Auth and multi-team support.
 - Better charting with a JS chart hook such as uPlot.
 - Optional database persistence for user preferences and runtime metadata.
@@ -219,12 +219,20 @@ queries:
       namespace: AWS/EC2
       metric: CPUUtilization
 
+processors:
+  cpu_raw:
+    query: cpu_raw
+
   high_cpu:
     from: cpu_raw
     transform:
       - filter:
           field: value
           gte: 75
+
+datasets:
+  high_cpu:
+    processor: high_cpu
 
 panels:
   - id: high-cpu
@@ -233,4 +241,4 @@ panels:
     dataset: high_cpu
 ```
 
-This model ensures `cpu_raw` can execute once and feed multiple derived datasets and panels.
+This model ensures `cpu_raw` can execute once and feed multiple derived processors and panels.
