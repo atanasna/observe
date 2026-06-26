@@ -244,6 +244,75 @@ defmodule Observe.QueryGraphTest do
              "queue{deployment=\"prod\",state=\"pending\"}"
   end
 
+  test "applies dataset delay to direct query source node" do
+    dashboard = %{
+      "variables" => %{},
+      "datasources" => %{"prometheus" => %{"ref" => "eu-p"}},
+      "queries" => %{
+        "response_time" => %{
+          "datasource" => "prometheus",
+          "request" => %{"range" => true, "query" => "lb_response_time"}
+        }
+      },
+      "datasets" => %{
+        "response_time_last_week" => %{"query" => "response_time", "delay" => "7d"}
+      },
+      "panels" => [
+        %{"id" => "response-time", "type" => "table", "dataset" => "response_time_last_week"}
+      ]
+    }
+
+    assert {:ok, plan} = QueryGraph.plan(dashboard, %{"eu-p" => %{}})
+    assert plan.queries["response_time_last_week"]["delay"] == "7d"
+  end
+
+  test "applies dataset delay to processor source node" do
+    dashboard = %{
+      "variables" => %{},
+      "datasources" => %{"prometheus" => %{"ref" => "eu-p"}},
+      "queries" => %{
+        "response_time" => %{
+          "datasource" => "prometheus",
+          "request" => %{"range" => true, "query" => "lb_response_time"}
+        }
+      },
+      "processors" => %{
+        "response_time_ms" => %{
+          "query" => "response_time",
+          "transform" => [%{"math" => %{"field" => "value", "divide" => 1000}}]
+        }
+      },
+      "datasets" => %{
+        "response_time_last_week" => %{"processor" => "response_time_ms", "delay" => "7d"}
+      },
+      "panels" => [
+        %{"id" => "response-time", "type" => "table", "dataset" => "response_time_last_week"}
+      ]
+    }
+
+    assert {:ok, plan} = QueryGraph.plan(dashboard, %{"eu-p" => %{}})
+    assert plan.queries["response_time_last_week__response_time"]["delay"] == "7d"
+    refute Map.has_key?(plan.queries["response_time_last_week"], "delay")
+  end
+
+  test "rejects invalid query delays" do
+    dashboard = %{
+      "variables" => %{},
+      "datasources" => %{"prometheus" => %{"ref" => "eu-p"}},
+      "queries" => %{
+        "cpu" => %{
+          "datasource" => "prometheus",
+          "delay" => "last-week",
+          "request" => %{"query" => "up"}
+        }
+      },
+      "panels" => []
+    }
+
+    assert {:error, reason} = QueryGraph.plan(dashboard, %{"eu-p" => %{}})
+    assert reason =~ "invalid delay"
+  end
+
   test "rejects datasets that define both query and processor" do
     dashboard = %{
       "variables" => %{},

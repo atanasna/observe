@@ -41,6 +41,8 @@ defmodule ObserveWeb.DashboardShowLive do
          |> assign(:refresh_timer, nil)
          |> assign(:run_ref, nil)
          |> assign(:run_id, nil)
+         |> assign(:run_started_at, nil)
+         |> assign(:dashboard_load_ms, nil)
          |> assign(:loading?, false)
          |> assign(:loading_datasets, MapSet.new())
          |> assign(:info_open?, false)
@@ -220,7 +222,11 @@ defmodule ObserveWeb.DashboardShowLive do
   end
 
   def handle_info({:dashboard_complete, run_id}, %{assigns: %{run_id: run_id}} = socket) do
-    {:noreply, socket |> assign(:loading?, false) |> assign(:loading_datasets, MapSet.new())}
+    {:noreply,
+     socket
+     |> assign(:dashboard_load_ms, elapsed_ms(socket.assigns.run_started_at))
+     |> assign(:loading?, false)
+     |> assign(:loading_datasets, MapSet.new())}
   end
 
   def handle_info({:dashboard_plan, _run_id, _plan}, socket), do: {:noreply, socket}
@@ -294,6 +300,8 @@ defmodule ObserveWeb.DashboardShowLive do
     |> assign(:variable_values, variable_values)
     |> assign(:loading?, true)
     |> assign(:loading_datasets, loading_datasets(only))
+    |> assign(:run_started_at, monotonic_ms())
+    |> assign(:dashboard_load_ms, nil)
     |> assign(:run_ref, task.ref)
     |> assign(:run_id, run_id)
     |> maybe_clear_datasets(only)
@@ -309,6 +317,11 @@ defmodule ObserveWeb.DashboardShowLive do
   defp maybe_clear_datasets(socket, :all), do: assign(socket, :datasets, %{})
 
   defp maybe_clear_datasets(socket, only), do: update(socket, :datasets, &Map.drop(&1, only))
+
+  defp monotonic_ms, do: System.monotonic_time(:millisecond)
+
+  defp elapsed_ms(started_at) when is_integer(started_at), do: max(monotonic_ms() - started_at, 0)
+  defp elapsed_ms(_started_at), do: nil
 
   defp start_variable_dashboard_run(socket, variable_values) do
     changed_vars = changed_variables(socket.assigns.variable_values, variable_values)
@@ -798,6 +811,9 @@ defmodule ObserveWeb.DashboardShowLive do
                     <p :if={query.datasource} class="mt-1 truncate text-[#bac2de]">
                       datasource: {query.datasource}
                     </p>
+                    <p :if={query.delay} class="mt-1 truncate text-[#f9e2af]">
+                      delay: {query.delay}
+                    </p>
                     <code
                       :if={query.query}
                       class="mt-1 block max-h-24 overflow-auto whitespace-pre-wrap border border-[#45475a]/60 bg-[#181825]/70 p-2 text-[0.68rem] leading-4 text-[#a6e3a1]"
@@ -868,8 +884,9 @@ defmodule ObserveWeb.DashboardShowLive do
               )
             ]}
           >
+            <% panel_loading? = panel_loading?(panel, @datasets, @loading?, @loading_datasets, @plan) %>
             <div
-              :if={panel["type"] != "row" and panel["type"] != "timeseries"}
+              :if={panel["type"] not in ["row", "timeseries", "sunburst"] and not panel_loading?}
               class="mb-2 flex items-center gap-1.5"
             >
               <h2 class="text-sm font-semibold text-[#cdd6f4]">
@@ -942,6 +959,7 @@ defmodule ObserveWeb.DashboardShowLive do
                         <span class="min-w-0 truncate text-[#cdd6f4]">{node.name}</span>
                         <span class="text-[0.65rem] uppercase tracking-[0.12em] text-[#bac2de]">
                           {node.kind}{if node.datasource, do: " / #{node.datasource}", else: ""}
+                          {if node.delay, do: " / delay #{node.delay}", else: ""}
                         </span>
                       </div>
                     </div>
@@ -950,8 +968,11 @@ defmodule ObserveWeb.DashboardShowLive do
               </details>
             <% end %>
 
-            <%= if panel_loading?(panel, @datasets, @loading?, @loading_datasets) do %>
-              <div class="flex min-h-28 items-center justify-center gap-3 border border-[#89dceb]/20 bg-[#89dceb]/10 p-4 text-xs font-semibold uppercase tracking-[0.16em] text-[#89dceb]">
+            <%= if panel_loading? do %>
+              <div
+                class="flex items-center justify-center gap-3 border border-[#89dceb]/20 bg-[#89dceb]/10 p-4 text-xs font-semibold uppercase tracking-[0.16em] text-[#89dceb]"
+                style={loading_panel_style(panel)}
+              >
                 <span class="inline-block size-4 animate-spin rounded-full border-2 border-[#89dceb]/25 border-t-[#89dceb]" />
                 Loading dataset
               </div>
@@ -1007,6 +1028,10 @@ defmodule ObserveWeb.DashboardShowLive do
                       id={"chart-#{panel["id"]}"}
                       panel={panel}
                       rows={panel_rows(panel, @datasets, @dashboard)}
+                      title={panel_title(panel, @dashboard, @variable_values, @datasources)}
+                      description={
+                        panel_description(panel, @dashboard, @variable_values, @datasources)
+                      }
                     />
                   <% "bargauge" -> %>
                     <div class="max-h-56 space-y-2 overflow-auto">
@@ -1044,6 +1069,24 @@ defmodule ObserveWeb.DashboardShowLive do
             <% end %>
           </article>
         </div>
+
+        <% graph_stats = graph_statistics(@plan, @dashboard) %>
+        <section
+          id="dashboard-graph-stats"
+          class="flex flex-wrap items-center gap-x-3 gap-y-1 border border-[#b4befe]/10 bg-[#11111b]/35 px-3 py-2 text-[0.68rem] font-semibold uppercase tracking-[0.12em] text-[#9399b2]"
+        >
+          <span class="text-[#89dceb]">Graph</span>
+          <span id="dashboard-graph-stat-queries">{graph_stats.query_refs} queries</span>
+          <span id="dashboard-graph-stat-datasets">{graph_stats.dataset_count} datasets</span>
+          <span id="dashboard-graph-stat-execution-nodes">{graph_stats.execution_nodes} nodes</span>
+          <span id="dashboard-graph-stat-derived-nodes">{graph_stats.derived_nodes} derived</span>
+          <span id="dashboard-graph-stat-reused-datasets">{graph_stats.reused_count} reused</span>
+          <span id="dashboard-graph-stat-datasources">{graph_stats.source_nodes} requests</span>
+          <span id="dashboard-graph-stat-max-depth">depth {graph_stats.max_depth}</span>
+          <span id="dashboard-graph-stat-load-time" class="text-[#f9e2af]">
+            loaded {format_duration(@dashboard_load_ms)}
+          </span>
+        </section>
       </section>
     </Layouts.app>
     """
@@ -1082,6 +1125,8 @@ defmodule ObserveWeb.DashboardShowLive do
   attr :id, :string, required: true
   attr :panel, :map, required: true
   attr :rows, :list, required: true
+  attr :title, :string, required: true
+  attr :description, :string, default: nil
 
   def sunburst_chart(assigns) do
     assigns =
@@ -1096,6 +1141,8 @@ defmodule ObserveWeb.DashboardShowLive do
       phx-update="ignore"
       data-chart={@chart_json}
       data-height={@height}
+      data-title={@title}
+      data-description={@description}
       class="relative min-h-40"
     />
     """
@@ -1148,6 +1195,173 @@ defmodule ObserveWeb.DashboardShowLive do
     Enum.sort_by(fallback || %{}, fn {name, _value} -> name end)
   end
 
+  defp graph_statistics(nil, dashboard) do
+    case Map.get(dashboard, "plan") do
+      nil -> empty_graph_statistics()
+      plan -> graph_statistics(plan, dashboard)
+    end
+  end
+
+  defp graph_statistics(%{query_order: order, queries: queries} = plan, dashboard) do
+    order = order || []
+    queries = queries || %{}
+    source_nodes = source_nodes(order, queries)
+    source_count = length(source_nodes)
+    derived_count = Enum.count(order, &(get_in(queries, [&1, "kind"]) == "derived"))
+    delayed_count = Enum.count(source_nodes, &Map.has_key?(&1, "delay"))
+    transform_count = Enum.count(order, &transform_node?(Map.get(queries, &1, %{})))
+    dataset_usage = panel_dataset_usage(Map.get(dashboard, "panels", []))
+    reused_datasets = reused_datasets(dataset_usage)
+    dataset_refs = Enum.reduce(dataset_usage, 0, fn {_name, count}, total -> total + count end)
+    dataset_count = planned_dataset_count(plan, order)
+    query_refs = source_query_ref_count(source_nodes)
+    max_depth = graph_max_depth(order, queries)
+
+    %{
+      query_refs: query_refs,
+      dataset_count: dataset_count,
+      execution_nodes: length(order),
+      derived_nodes: derived_count,
+      source_nodes: source_count,
+      delayed_nodes: delayed_count,
+      reused_count: length(reused_datasets),
+      max_depth: max_depth,
+      datasources: request_counts(source_nodes),
+      reused_datasets: reused_datasets,
+      primary: [
+        %{
+          id: "queries",
+          label: "Reusable queries",
+          value: query_refs,
+          detail: "#{map_size(Map.get(dashboard, "queries", %{}))} definitions available"
+        },
+        %{
+          id: "datasets",
+          label: "Datasets",
+          value: dataset_count,
+          detail: "#{dataset_refs} panel references"
+        },
+        %{
+          id: "execution-nodes",
+          label: "Execution nodes",
+          value: length(order),
+          detail: "#{source_count} source / #{derived_count} derived"
+        },
+        %{
+          id: "derived-nodes",
+          label: "Derived nodes",
+          value: derived_count,
+          detail: "#{transform_count} nodes apply transforms"
+        },
+        %{
+          id: "delayed-nodes",
+          label: "Delayed nodes",
+          value: delayed_count,
+          detail: "historical windows overlaid"
+        },
+        %{
+          id: "reused-datasets",
+          label: "Reused datasets",
+          value: length(reused_datasets),
+          detail: "shared by more than one panel"
+        },
+        %{
+          id: "datasources",
+          label: "Datasource requests",
+          value: source_count,
+          detail: "#{length(request_counts(source_nodes))} datasource aliases"
+        },
+        %{
+          id: "max-depth",
+          label: "Max depth",
+          value: max_depth,
+          detail: "longest dependency path"
+        }
+      ]
+    }
+  end
+
+  defp graph_statistics(_plan, _dashboard), do: empty_graph_statistics()
+
+  defp empty_graph_statistics do
+    %{
+      query_refs: 0,
+      dataset_count: 0,
+      execution_nodes: 0,
+      derived_nodes: 0,
+      source_nodes: 0,
+      delayed_nodes: 0,
+      reused_count: 0,
+      max_depth: 0,
+      datasources: [],
+      reused_datasets: [],
+      primary: []
+    }
+  end
+
+  defp planned_dataset_count(%{datasets: datasets}, order) when is_map(datasets) do
+    if map_size(datasets) > 0, do: map_size(datasets), else: length(order)
+  end
+
+  defp planned_dataset_count(_plan, order), do: length(order)
+
+  defp source_query_ref_count(source_nodes) do
+    source_nodes
+    |> Enum.map(
+      &(Map.get(&1, "query_ref") || Map.get(&1, "_name") || get_in(&1, ["request", "query"]))
+    )
+    |> Enum.reject(&is_nil/1)
+    |> MapSet.new()
+    |> MapSet.size()
+  end
+
+  defp transform_node?(%{"transform" => transforms})
+       when is_list(transforms) and transforms != [],
+       do: true
+
+  defp transform_node?(_query), do: false
+
+  defp reused_datasets(dataset_usage) do
+    dataset_usage
+    |> Enum.filter(fn {_name, count} -> count > 1 end)
+    |> Enum.map(fn {name, count} -> %{name: name, count: count} end)
+    |> Enum.sort_by(& &1.name)
+  end
+
+  defp graph_max_depth([], _queries), do: 0
+
+  defp graph_max_depth(order, queries) do
+    order
+    |> Enum.map(&node_depth(&1, queries, MapSet.new()))
+    |> Enum.max(fn -> 0 end)
+  end
+
+  defp node_depth(name, queries, seen) do
+    cond do
+      MapSet.member?(seen, name) ->
+        0
+
+      not Map.has_key?(queries, name) ->
+        0
+
+      true ->
+        query = Map.fetch!(queries, name)
+
+        case Map.get(query, "from") do
+          parent when is_binary(parent) -> 1 + node_depth(parent, queries, MapSet.put(seen, name))
+          _parent -> 1
+        end
+    end
+  end
+
+  defp format_duration(nil), do: "pending"
+  defp format_duration(ms) when is_integer(ms) and ms < 1_000, do: "#{ms}ms"
+
+  defp format_duration(ms) when is_integer(ms) do
+    seconds = ms / 1_000
+    :erlang.float_to_binary(seconds, decimals: 2) <> "s"
+  end
+
   defp applied_datasets(nil), do: []
 
   defp applied_datasets(%{query_order: order, queries: queries}) do
@@ -1174,6 +1388,7 @@ defmodule ObserveWeb.DashboardShowLive do
         name: name,
         kind: Map.get(query, "kind", "unknown"),
         datasource: Map.get(query, "datasource"),
+        delay: Map.get(query, "delay"),
         query: query |> get_in(["request", "query"]) |> truncate_info(900)
       }
     end)
@@ -1284,7 +1499,8 @@ defmodule ObserveWeb.DashboardShowLive do
     %{
       name: Map.get(query, "_name"),
       kind: Map.get(query, "kind", "unknown"),
-      datasource: Map.get(query, "datasource")
+      datasource: Map.get(query, "datasource"),
+      delay: Map.get(query, "delay")
     }
   end
 
@@ -1300,18 +1516,29 @@ defmodule ObserveWeb.DashboardShowLive do
     query_ref = Map.get(query, "query_ref")
     datasource = Map.get(query, "datasource")
 
-    cond do
-      is_binary(query_ref) and is_binary(datasource) -> "#{query_ref} via #{datasource}"
-      is_binary(query_ref) -> query_ref
-      is_binary(datasource) -> "via #{datasource}"
-      true -> "source query"
-    end
+    detail =
+      cond do
+        is_binary(query_ref) and is_binary(datasource) -> "#{query_ref} via #{datasource}"
+        is_binary(query_ref) -> query_ref
+        is_binary(datasource) -> "via #{datasource}"
+        true -> "source query"
+      end
+
+    append_delay_detail(detail, Map.get(query, "delay"))
   end
 
   defp dataset_detail(%{"kind" => "derived", "from" => from}) when is_binary(from),
     do: "from #{from}"
 
   defp dataset_detail(_query), do: "dataset"
+
+  defp append_delay_detail(detail, delay) when is_binary(delay) and delay != "" do
+    "#{detail}, delay #{delay}"
+  end
+
+  defp append_delay_detail(detail, delay) when is_integer(delay), do: "#{detail}, delay #{delay}s"
+
+  defp append_delay_detail(detail, _delay), do: detail
 
   defp format_info_value(value) when is_binary(value), do: value
   defp format_info_value(value), do: inspect(value, limit: 20)
@@ -1424,6 +1651,8 @@ defmodule ObserveWeb.DashboardShowLive do
     |> bounded_integer(default, 120, 800)
   end
 
+  defp loading_panel_style(panel), do: "min-height: #{panel_height(panel, 160)}px"
+
   defp bounded_integer(value, _default, min, max) when is_integer(value),
     do: value |> Kernel.max(min) |> Kernel.min(max)
 
@@ -1465,26 +1694,58 @@ defmodule ObserveWeb.DashboardShowLive do
 
   defp interpolate_panel_text(value, _dashboard, _variable_values, _datasources), do: value
 
-  defp panel_loading?(%{"type" => "row"}, _datasets, _loading?, _loading_datasets), do: false
+  defp panel_loading?(%{"type" => "row"}, _datasets, _loading?, _loading_datasets, _plan),
+    do: false
 
-  defp panel_loading?(panel, _datasets, true, %MapSet{} = loading_datasets) do
+  defp panel_loading?(panel, _datasets, true, %MapSet{} = loading_datasets, plan) do
     if MapSet.size(loading_datasets) > 0 do
       panel
-      |> panel_dataset_names()
+      |> panel_loading_node_names(plan)
       |> Enum.any?(&MapSet.member?(loading_datasets, &1))
     else
       false
     end
   end
 
-  defp panel_loading?(%{"datasets" => panel_datasets}, datasets, true, _loading_datasets)
+  defp panel_loading?(%{"datasets" => panel_datasets}, datasets, true, _loading_datasets, _plan)
        when is_list(panel_datasets),
        do: Enum.any?(panel_datasets, &(not Map.has_key?(datasets, panel_dataset_name(&1))))
 
-  defp panel_loading?(%{"dataset" => dataset}, datasets, true, _loading_datasets),
+  defp panel_loading?(%{"dataset" => dataset}, datasets, true, _loading_datasets, _plan),
     do: not Map.has_key?(datasets, dataset)
 
-  defp panel_loading?(_panel, _datasets, _loading?, _loading_datasets), do: false
+  defp panel_loading?(_panel, _datasets, _loading?, _loading_datasets, _plan), do: false
+
+  defp panel_loading_node_names(panel, %{queries: queries}) when is_map(queries) do
+    panel
+    |> panel_dataset_names()
+    |> Enum.reject(&is_nil/1)
+    |> Enum.flat_map(fn name -> [name | dependency_node_names(name, queries, MapSet.new())] end)
+    |> Enum.uniq()
+  end
+
+  defp panel_loading_node_names(panel, _plan), do: panel_dataset_names(panel)
+
+  defp dependency_node_names(name, queries, seen) do
+    cond do
+      MapSet.member?(seen, name) ->
+        []
+
+      not Map.has_key?(queries, name) ->
+        []
+
+      true ->
+        query = Map.fetch!(queries, name)
+
+        case Map.get(query, "from") do
+          parent when is_binary(parent) ->
+            [parent | dependency_node_names(parent, queries, MapSet.put(seen, name))]
+
+          _parent ->
+            []
+        end
+    end
+  end
 
   defp panel_error(panel, datasets, dashboard) do
     case PanelCompatibility.validate(panel, panel_rows(panel, datasets, dashboard)) do

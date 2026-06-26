@@ -29,6 +29,21 @@ defmodule Observe.TimeRange do
 
   def default, do: "now-3h"
 
+  def duration_seconds(value) when is_integer(value) and value >= 0, do: {:ok, value}
+
+  def duration_seconds(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {amount, "s"} when amount >= 0 -> {:ok, amount}
+      {amount, "m"} when amount >= 0 -> {:ok, amount * 60}
+      {amount, "h"} when amount >= 0 -> {:ok, amount * 60 * 60}
+      {amount, "d"} when amount >= 0 -> {:ok, amount * 24 * 60 * 60}
+      {amount, ""} when amount >= 0 -> {:ok, amount}
+      _invalid -> :error
+    end
+  end
+
+  def duration_seconds(_value), do: :error
+
   def range(value \\ default()) do
     seconds = Map.get(@ranges, value, @ranges[default()])
     now = DateTime.utc_now()

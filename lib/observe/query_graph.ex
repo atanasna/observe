@@ -3,6 +3,7 @@ defmodule Observe.QueryGraph do
   Validates dashboard query definitions and compiles them into an execution plan.
   """
 
+  alias Observe.TimeRange
   alias Observe.Variables
 
   def plan(dashboard, provisioned_datasources, variable_values \\ nil) do
@@ -102,7 +103,9 @@ defmodule Observe.QueryGraph do
                  configs
                ) do
           config = Map.merge(Map.get(configs, dataset_name, %{}), dataset)
-          {:ok, queries, Map.put(configs, dataset_name, config)}
+
+          {:ok, put_delay_on_sources(queries, dataset_name, dataset),
+           Map.put(configs, dataset_name, config)}
         end
 
       processor_ref = dataset_processor_ref(dataset) ->
@@ -121,21 +124,54 @@ defmodule Observe.QueryGraph do
                  MapSet.new()
                ) do
           config = Map.merge(Map.get(configs, dataset_name, %{}), dataset)
-          {:ok, queries, Map.put(configs, dataset_name, config)}
+
+          {:ok, put_delay_on_sources(queries, dataset_name, dataset),
+           Map.put(configs, dataset_name, config)}
         end
 
       true ->
-        expand_processor(
-          dataset_name,
-          dataset,
-          %{},
-          processors,
-          query_templates,
-          vars,
-          queries,
-          configs,
-          MapSet.new()
-        )
+        with {:ok, queries, configs, node} <-
+               expand_processor(
+                 dataset_name,
+                 dataset,
+                 %{},
+                 processors,
+                 query_templates,
+                 vars,
+                 queries,
+                 configs,
+                 MapSet.new()
+               ) do
+          {:ok, put_delay_on_sources(queries, node, dataset), configs, node}
+        end
+    end
+  end
+
+  defp put_delay_on_sources(queries, node_name, %{"delay" => delay}) do
+    put_delay_on_sources(queries, node_name, delay, MapSet.new())
+  end
+
+  defp put_delay_on_sources(queries, _node_name, _dataset), do: queries
+
+  defp put_delay_on_sources(queries, node_name, delay, seen) do
+    cond do
+      MapSet.member?(seen, node_name) ->
+        queries
+
+      not Map.has_key?(queries, node_name) ->
+        queries
+
+      true ->
+        seen = MapSet.put(seen, node_name)
+        query = Map.fetch!(queries, node_name)
+
+        case Map.get(query, "from") do
+          parent when is_binary(parent) ->
+            put_delay_on_sources(queries, parent, delay, seen)
+
+          _parent ->
+            Map.update!(queries, node_name, &Map.put(&1, "delay", delay))
+        end
     end
   end
 
@@ -575,11 +611,17 @@ defmodule Observe.QueryGraph do
         source? ->
           datasource = Map.get(query, "datasource")
 
-          if Map.has_key?(datasource_aliases, datasource) do
-            {:cont, {:ok, Map.put(acc, name, Map.put(query, "kind", "source"))}}
-          else
-            {:halt,
-             {:error, "query #{name} references unknown datasource #{inspect(datasource)}"}}
+          cond do
+            not Map.has_key?(datasource_aliases, datasource) ->
+              {:halt,
+               {:error, "query #{name} references unknown datasource #{inspect(datasource)}"}}
+
+            invalid_delay?(query) ->
+              {:halt,
+               {:error, "query #{name} has invalid delay #{inspect(Map.get(query, "delay"))}"}}
+
+            true ->
+              {:cont, {:ok, Map.put(acc, name, Map.put(query, "kind", "source"))}}
           end
 
         derived? ->
@@ -596,6 +638,9 @@ defmodule Observe.QueryGraph do
       end
     end)
   end
+
+  defp invalid_delay?(%{"delay" => delay}), do: TimeRange.duration_seconds(delay) == :error
+  defp invalid_delay?(_query), do: false
 
   defp validate_panels(panels, queries) do
     missing =

@@ -124,20 +124,37 @@ datasets:
       deployment: ${vars.deployment}
       state: delayed
       priority: bulk
+  #### ETs
+  queue_low_jobs_et:
+    processor: queue_jobs_et
+    inputs:
+      deployment: ${vars.deployment}
+      tenant: ${vars.tenant}
+      job: ${vars.job}
+      priority: low
+  queue_bulk_jobs_et:
+    processor: queue_jobs_et
+    inputs:
+      deployment: ${vars.deployment}
+      tenant: ${vars.tenant}
+      job: ${vars.job}
+      priority: bulk
   queue_default_jobs_et:
     processor: queue_jobs_et
     inputs:
       deployment: ${vars.deployment}
       tenant: ${vars.tenant}
       job: ${vars.job}
-      priority: ${vars.priority}
+      priority: default
   queue_high_jobs_et:
     processor: queue_jobs_et
     inputs:
       deployment: ${vars.deployment}
       tenant: ${vars.tenant}
       job: ${vars.job}
-      priority: ${vars.priority}
+      priority: high
+
+  # Preassure
   queue_jobs_preasure:
     processor: queue_jobs_preasure
     inputs:
@@ -217,7 +234,7 @@ panels:
           format: Bulk
 
   - id: ana-metrics
-    title: ANA Metrics
+    title: ANA (ET) 
     type: row
     collapsed: false
 
@@ -248,6 +265,39 @@ panels:
       - name: queue_high_jobs_et
         legend:
           format: "{{tenant}} - {{exported_job}}"
+
+  - id: execution-time-low
+    title: "Execution Time : LOW"
+    description: Average execution time for the top 10 high-priority jobs by tenant and job.
+    type: timeseries
+    legend:
+      position: right
+    layout:
+      width: 8
+      height: 300 
+    datasets:
+      - name: queue_low_jobs_et
+        legend:
+          format: "{{tenant}} - {{exported_job}}"
+
+  - id: execution-time-bulk
+    title: "Execution Time : BULK"
+    description: Average execution time for the top 10 high-priority jobs by tenant and job.
+    type: timeseries
+    legend:
+      position: right
+    layout:
+      width: 8
+      height: 300 
+    datasets:
+      - name: queue_bulk_jobs_et
+        legend:
+          format: "{{tenant}} - {{exported_job}}"
+
+  - id: ana-preassure
+    title: ANA (Preassure) 
+    type: row
+    collapsed: false
 
   - id: preasure
     title: "Preasure : ${vars.priority}"

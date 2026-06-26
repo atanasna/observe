@@ -4,6 +4,7 @@ defmodule Observe.Executor do
   """
 
   alias Observe.QueryGraph
+  alias Observe.TimeRange
   alias Observe.Variables
   alias Observe.Datasources.Prometheus
 
@@ -221,28 +222,100 @@ defmodule Observe.Executor do
   defp source_dataset(name, query, plan, opts) do
     datasource = plan.datasource_aliases[query["datasource"]]
     type = get_in(datasource, [:config, "type"]) || get_in(datasource, ["config", "type"])
-    query = Variables.interpolate(query, plan.variable_context || plan.variables)
 
-    case Map.get(opts, :source_dataset) do
-      fun when is_function(fun, 2) ->
-        fun.(name, query)
+    query =
+      query
+      |> Variables.interpolate(plan.variable_context || plan.variables)
+      |> apply_query_delay(opts)
 
-      _fun ->
-        case type do
-          "prometheus" ->
-            prometheus_rows(name, datasource[:config] || datasource["config"], query, opts)
+    shift_seconds = Map.get(query, "_time_shift_seconds", 0)
 
-          "cloudwatch" ->
-            cloudwatch_rows(name)
+    rows =
+      case Map.get(opts, :source_dataset) do
+        fun when is_function(fun, 2) ->
+          fun.(name, query)
 
-          "opensearch" ->
-            opensearch_rows(name)
+        _fun ->
+          case type do
+            "prometheus" ->
+              prometheus_rows(name, datasource[:config] || datasource["config"], query, opts)
 
-          _ ->
-            generic_rows(name)
-        end
+            "cloudwatch" ->
+              cloudwatch_rows(name)
+
+            "opensearch" ->
+              opensearch_rows(name)
+
+            _ ->
+              generic_rows(name)
+          end
+      end
+
+    realign_rows(rows, shift_seconds)
+  end
+
+  defp apply_query_delay(%{"delay" => delay, "request" => request} = query, opts)
+       when is_map(request) do
+    with {:ok, seconds} when seconds > 0 <- TimeRange.duration_seconds(delay) do
+      query
+      |> Map.put("request", delayed_request(request, opts, seconds))
+      |> Map.put("_time_shift_seconds", seconds)
+    else
+      _value -> query
     end
   end
+
+  defp apply_query_delay(query, _opts), do: query
+
+  defp delayed_request(%{"start" => start, "end" => end_time} = request, _opts, seconds)
+       when is_number(start) and is_number(end_time) do
+    request
+    |> Map.put("start", start - seconds)
+    |> Map.put("end", end_time - seconds)
+  end
+
+  defp delayed_request(
+         %{"range" => true} = request,
+         %{time_range: %{from: from, to: to}},
+         seconds
+       ) do
+    request
+    |> Map.put("start", from - seconds)
+    |> Map.put("end", to - seconds)
+  end
+
+  defp delayed_request(%{"range" => true} = request, _opts, seconds) do
+    now = DateTime.utc_now()
+    end_time = DateTime.to_unix(now)
+
+    start =
+      request
+      |> Map.get("start")
+      |> Kernel.||(now |> DateTime.add(-10_800, :second) |> DateTime.to_unix())
+
+    request
+    |> Map.put("start", start - seconds)
+    |> Map.put("end", end_time - seconds)
+  end
+
+  defp delayed_request(%{"time" => time} = request, _opts, seconds) when is_number(time) do
+    Map.put(request, "time", time - seconds)
+  end
+
+  defp delayed_request(request, %{time_range: %{to: to}}, seconds) do
+    Map.put_new(request, "time", to - seconds)
+  end
+
+  defp delayed_request(request, _opts, _seconds), do: request
+
+  defp realign_rows(rows, seconds) when is_integer(seconds) and seconds > 0 do
+    Enum.map(rows, fn
+      %{"time" => time} = row when is_number(time) -> Map.put(row, "time", time + seconds)
+      row -> row
+    end)
+  end
+
+  defp realign_rows(rows, _seconds), do: rows
 
   defp transform_dataset(rows, transforms) do
     Enum.reduce(transforms || [], rows, fn transform, acc ->

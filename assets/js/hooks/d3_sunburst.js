@@ -42,7 +42,19 @@ export const D3Sunburst = {
     this.el.classList.toggle("bg-[#11111b]", fullscreen)
 
     const controls = document.createElement("div")
-    controls.className = "mb-2 flex items-center justify-end gap-1.5"
+    controls.className = "mb-2 flex items-center justify-between gap-2"
+
+    const title = document.createElement("div")
+    title.className = "min-w-0 truncate text-sm font-semibold text-[#cdd6f4]"
+    title.textContent = this.el.dataset.title || "Sunburst"
+
+    const description = this.el.dataset.description
+    if (description) {
+      title.title = description
+    }
+
+    const actions = document.createElement("div")
+    actions.className = "flex shrink-0 items-center justify-end gap-1.5"
 
     const resetButton = iconButton({
       label: "Reset sunburst zoom",
@@ -58,7 +70,7 @@ export const D3Sunburst = {
       this.focusPath = []
       this.render()
     })
-    controls.appendChild(resetButton)
+    actions.appendChild(resetButton)
 
     const fullscreenButton = iconButton({
       label: fullscreen ? "Exit fullscreen" : "Fullscreen",
@@ -72,7 +84,9 @@ export const D3Sunburst = {
         this.el.requestFullscreen()
       }
     })
-    controls.appendChild(fullscreenButton)
+    actions.appendChild(fullscreenButton)
+    controls.appendChild(title)
+    controls.appendChild(actions)
     this.el.appendChild(controls)
 
     if (!payload.root || !payload.root.children || payload.root.children.length === 0) {

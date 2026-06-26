@@ -25,6 +25,14 @@ defmodule Observe.TimeRangeTest do
     assert range.to - range.from == 5_400
   end
 
+  test "parses compact durations" do
+    assert TimeRange.duration_seconds("15m") == {:ok, 900}
+    assert TimeRange.duration_seconds("3h") == {:ok, 10_800}
+    assert TimeRange.duration_seconds("7d") == {:ok, 604_800}
+    assert TimeRange.duration_seconds(60) == {:ok, 60}
+    assert TimeRange.duration_seconds("later") == :error
+  end
+
   test "custom range parses datetime-local values" do
     range = TimeRange.custom!("2026-01-01T10:00", "2026-01-01T11:30")
 

@@ -254,6 +254,38 @@ defmodule Observe.ExecutorTest do
            }
   end
 
+  test "delays range requests and realigns returned timestamps" do
+    dashboard = %{
+      "variables" => %{},
+      "datasources" => %{"prometheus" => %{"ref" => "fake-prometheus"}},
+      "queries" => %{
+        "response_time" => %{
+          "datasource" => "prometheus",
+          "delay" => "1h",
+          "request" => %{"query" => "lb_response_time", "range" => true, "interval" => "1m"}
+        }
+      },
+      "panels" => []
+    }
+
+    assert {:ok, %{datasets: %{"response_time" => rows}}} =
+             Executor.run(dashboard, %{}, %{
+               datasources: %{"fake-prometheus" => %{"type" => "prometheus"}},
+               time_range: %{from: 7_200, to: 10_800},
+               source_dataset: fn "response_time", query ->
+                 assert get_in(query, ["request", "start"]) == 3_600
+                 assert get_in(query, ["request", "end"]) == 7_200
+
+                 [
+                   %{"time" => 3_600, "value" => 10},
+                   %{"time" => 7_200, "value" => 20}
+                 ]
+               end
+             })
+
+    assert Enum.map(rows, & &1["time"]) == [7_200, 10_800]
+  end
+
   defp source_dashboard do
     %{
       "variables" => %{},

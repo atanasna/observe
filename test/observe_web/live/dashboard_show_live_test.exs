@@ -51,6 +51,26 @@ defmodule ObserveWeb.DashboardShowLiveTest do
     assert render(view) =~ "queue_default_jobs_et__queue_jobs_et"
   end
 
+  test "renders compiled graph statistics at the bottom", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/dashboards/queue")
+
+    assert has_element?(view, "#dashboard-graph-stats")
+    assert has_element?(view, "#dashboard-graph-stat-queries")
+    assert has_element?(view, "#dashboard-graph-stat-datasets")
+    assert has_element?(view, "#dashboard-graph-stat-execution-nodes")
+    assert has_element?(view, "#dashboard-graph-stat-derived-nodes")
+    assert has_element?(view, "#dashboard-graph-stat-reused-datasets")
+    assert has_element?(view, "#dashboard-graph-stat-datasources")
+    assert has_element?(view, "#dashboard-graph-stat-max-depth")
+    assert has_element?(view, "#dashboard-graph-stat-load-time")
+
+    html = render(view)
+    assert html =~ "Graph"
+    assert html =~ "queries"
+    assert html =~ "datasets"
+    assert html =~ "loaded"
+  end
+
   test "renders queue dashboard with dependent variables and collapsible panel sections", %{
     conn: conn
   } do
@@ -68,8 +88,11 @@ defmodule ObserveWeb.DashboardShowLiveTest do
     assert has_element?(view, ~s(#panel-pending[data-layout-height="300"]))
     assert has_element?(view, ~s(#panel-running[data-layout-height="300"]))
     assert has_element?(view, ~s(#panel-delayed[data-layout-height="300"]))
+    assert has_element?(view, ~s(#panel-preasure[data-layout-height="300"]))
+    assert has_element?(view, ~s(#panel-preassure-pie[data-layout-height="300"]))
 
     assert has_element?(view, ~s(#panel-ana-metrics[data-section-collapsed="false"]))
+    assert has_element?(view, ~s(#panel-ana-preassure[data-section-collapsed="false"]))
     assert has_element?(view, "#panel-execution-time-default")
 
     view
