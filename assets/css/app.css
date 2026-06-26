@@ -176,7 +176,7 @@ body {
 
 .mocha-card {
   border: 1px solid rgb(180 190 254 / 0.20);
-  background: linear-gradient(145deg, rgb(49 50 68 / 0.62), rgb(24 24 37 / 0.84));
+  background: rgb(24 24 37 / 0.88);
   backdrop-filter: blur(12px);
 }
 
@@ -186,7 +186,7 @@ body {
 
 .mocha-panel {
   border: 1px solid rgb(137 180 250 / 0.24);
-  background: linear-gradient(180deg, rgb(49 50 68 / 0.56), rgb(30 30 46 / 0.90));
+  background: rgb(30 30 46 / 0.90);
 }
 
 .mocha-chip {
