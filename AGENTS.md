@@ -3,13 +3,31 @@ This is a web application written using the Phoenix web framework.
 # Overview
 The app is used to poll and visualize data, similar to Grafana.
 
+# CRITICAL RULES
+- **THE APP MUST BE LIGHTNING FAST**, nothing should take presedence before speed of the app. We can pay for compute but not for user's time wasted in waiting
+- **NEVER LOAD THE DATASOURCES**. Datasource as lean and we should make sure to architect the queries as small as possible. The app **SHOULD NEVER EVER** ask a datasource for the same information twice. Users make a lot of similar request so we should cache the data to not send duplicated queries to the datasource or pull data that has already been pulled.
+
 # Core Concepts
+## Structural Elements
 1. Datasource - This is the place where the data is stored and will be pulled. Example are Grafana, Opensearch, AWS Cloudwatch etc.
 1. Query - This is template of a query that will be ran agains a datasource. It accepts inputs that are interpolated in the query before execution.
 1. Processor - This is an action that can be applied to data. These can be transforms, filters, math functions. etc
-1. Dataset - Used to store actual data
+1. Dataset - Used to store actual data. They can be derived from other datasets or use the data directly from a processor or query
 1. Panel - Used to visualize one or more dataset. It is responsible for any visual details. It can have many tipes, like timeline, sunburst etc.
 1. Dashaboard - Placeholder for various panels
+
+## Data flow
+1. User opens a dashboard
+1. The dashboard needs to display all panels
+1. Each panel has to visualize all of its datasets.
+1. The app needs to generate the dataset so it needs to get the data from a datasoure
+1. The app backtraces the link between datasource -> processor -> query and passes all variables to understand the exact queries that need to be ran against the datasource.
+1. Data is polled from datasource
+1. The data is transform/filtered through the piped processors
+1. The data is formed into a dataset
+1. The dataset is displayed in the panel of the dashboard
+
+
 
 ## Project guidelines
 
