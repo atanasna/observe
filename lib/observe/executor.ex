@@ -8,6 +8,8 @@ defmodule Observe.Executor do
   alias Observe.Variables
   alias Observe.Datasources.Prometheus
 
+  @prometheus_cache_version 2
+
   def run(dashboard, params \\ %{}, opts \\ %{}) do
     datasources = datasources(opts)
     vars = Variables.merge(Map.get(dashboard, "variables", %{}), params, datasources)
@@ -90,7 +92,7 @@ defmodule Observe.Executor do
     runnable
     |> Task.async_stream(
       fn name ->
-        {name, query_dataset(name, plan, datasets, opts) |> normalize_dataset(name, plan, opts)}
+        {name, cached_dataset(name, plan, datasets, opts)}
       end,
       max_concurrency: max_concurrency(opts),
       ordered: false,
@@ -100,6 +102,90 @@ defmodule Observe.Executor do
       notify.({:dataset, name, dataset})
       Map.put(acc, name, dataset)
     end)
+  end
+
+  defp cached_dataset(name, plan, datasets, opts) do
+    case dataset_cache(opts) do
+      nil ->
+        build_dataset(name, plan, datasets, opts)
+
+      cache ->
+        case dataset_cache_range(name, plan, opts) do
+          nil ->
+            key = dataset_exact_cache_key(name, plan, opts)
+
+            {:ok, rows} =
+              Observe.DatasetCache.fetch(cache, key, fn ->
+                build_dataset(name, plan, datasets, opts)
+              end)
+
+            rows
+
+          range ->
+            cached_dataset_for_range(cache, name, plan, opts, range)
+        end
+    end
+  end
+
+  defp dataset_cache(%{dataset_cache: cache}), do: cache
+  defp dataset_cache(%{source_dataset: _fun}), do: nil
+  defp dataset_cache(%{prometheus_execute: _fun}), do: nil
+  defp dataset_cache(_opts), do: Observe.DatasetCache
+
+  defp build_dataset(name, plan, datasets, opts) do
+    query_dataset(name, plan, datasets, opts)
+    |> normalize_dataset(name, plan, opts)
+  end
+
+  defp cached_dataset_for_range(cache, name, plan, opts, range) do
+    key = dataset_range_cache_key(name, plan)
+
+    {:ok, rows} =
+      Observe.DatasetCache.fetch_range(cache, key, range, fn gap ->
+        build_dataset_for_range(cache, name, plan, opts, gap)
+      end)
+
+    rows
+  end
+
+  defp build_dataset_for_range(cache, name, plan, opts, range) do
+    query = plan.queries[name]
+    range_opts = Map.put(opts, :time_range, %{from: range.from, to: range.to})
+
+    rows =
+      case query["kind"] do
+        "source" ->
+          source_dataset(name, query, plan, range_opts)
+
+        "derived" ->
+          parent = Map.fetch!(query, "from")
+          parent_rows = cached_dataset_for_range(cache, parent, plan, range_opts, range)
+          transform_dataset(parent_rows, Map.get(query, "transform", []))
+      end
+
+    normalize_dataset(rows, name, plan, range_opts)
+  end
+
+  defp dataset_cache_range(name, plan, opts) do
+    with %{from: from, to: to} <- Map.get(opts, :time_range),
+         query <- source_query_for_normalization(name, plan),
+         false <- topk_prometheus_query?(Map.get(query, "request", %{})),
+         step when is_integer(step) and step > 0 <- query_step_seconds(query) do
+      %{from: from, to: to, step: step}
+    else
+      _value -> nil
+    end
+  end
+
+  defp dataset_exact_cache_key(name, plan, opts) do
+    time_range = Map.get(opts, :time_range)
+    plan_fingerprint = :erlang.phash2({plan.queries, plan.datasets})
+    {:dataset, 1, name, time_range, plan_fingerprint}
+  end
+
+  defp dataset_range_cache_key(name, plan) do
+    plan_fingerprint = :erlang.phash2({plan.queries, plan.datasets})
+    {:dataset_range, 1, name, plan_fingerprint}
   end
 
   defp max_concurrency(opts) do
@@ -379,7 +465,7 @@ defmodule Observe.Executor do
   defp prometheus_rows(name, %{"mode" => "real"} = datasource, query, opts) do
     request = apply_time_range(Map.get(query, "request", %{}), opts)
 
-    case Prometheus.execute(datasource, request) do
+    case execute_prometheus_request(datasource, request, opts) do
       {:ok, rows} -> rows
       {:error, reason} -> [%{"query" => name, "error" => reason, "value" => nil}]
     end
@@ -391,6 +477,78 @@ defmodule Observe.Executor do
       %{"time" => "10:01", "service" => "api", "value" => 211},
       %{"time" => "10:02", "service" => "worker", "value" => 89}
     ]
+  end
+
+  defp execute_prometheus_request(datasource, request, opts) do
+    with true <- cacheable_range_request?(request),
+         step when is_integer(step) and step > 0 <- prometheus_step_seconds(request),
+         cache when not is_nil(cache) <- Map.get(opts, :query_cache, Observe.QueryCache) do
+      range = %{from: request["start"], to: request["end"], step: step}
+
+      if topk_prometheus_query?(request) do
+        execute_exact_cached_prometheus_request(cache, datasource, request, opts, range)
+      else
+        execute_incremental_cached_prometheus_request(cache, datasource, request, opts, range)
+      end
+    else
+      _value -> prometheus_execute(datasource, request, opts)
+    end
+  end
+
+  defp execute_incremental_cached_prometheus_request(cache, datasource, request, opts, range) do
+    cache_key = prometheus_cache_key(datasource, request)
+
+    Observe.QueryCache.fetch_range(cache, cache_key, range, fn gap ->
+      gap_request = request |> Map.put("start", gap.from) |> Map.put("end", gap.to)
+      prometheus_execute(datasource, gap_request, opts)
+    end)
+  end
+
+  defp execute_exact_cached_prometheus_request(cache, datasource, request, opts, range) do
+    cache_key = prometheus_exact_cache_key(datasource, request)
+
+    Observe.QueryCache.fetch_range(cache, cache_key, range, fn _gap ->
+      prometheus_execute(datasource, request, opts)
+    end)
+  end
+
+  defp prometheus_execute(datasource, request, opts) do
+    case Map.get(opts, :prometheus_execute) do
+      fun when is_function(fun, 2) -> fun.(datasource, request)
+      _fun -> Prometheus.execute(datasource, request)
+    end
+  end
+
+  defp cacheable_range_request?(%{"start" => start, "end" => end_time} = request)
+       when is_number(start) and is_number(end_time) do
+    not topk_prometheus_query?(request) and
+      (Map.get(request, "range") || Map.has_key?(request, "step") ||
+         Map.has_key?(request, "interval"))
+  end
+
+  defp cacheable_range_request?(_request), do: false
+
+  defp topk_prometheus_query?(%{"query" => query}) when is_binary(query) do
+    query |> String.downcase() |> String.contains?("topk(")
+  end
+
+  defp topk_prometheus_query?(_request), do: false
+
+  defp prometheus_step_seconds(request) do
+    request
+    |> Map.get("step")
+    |> Kernel.||(Map.get(request, "interval"))
+    |> Kernel.||("1m")
+    |> interval_seconds()
+  end
+
+  defp prometheus_cache_key(datasource, request) do
+    request_shape = Map.drop(request, ["start", "end"])
+    {:prometheus_range, @prometheus_cache_version, :erlang.phash2(datasource), request_shape}
+  end
+
+  defp prometheus_exact_cache_key(datasource, request) do
+    {:prometheus_exact_range, @prometheus_cache_version, :erlang.phash2(datasource), request}
   end
 
   defp apply_time_range(%{"range" => true} = request, %{time_range: %{from: from, to: to}}) do

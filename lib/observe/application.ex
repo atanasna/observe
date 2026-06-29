@@ -11,6 +11,8 @@ defmodule Observe.Application do
       ObserveWeb.Telemetry,
       Observe.Store,
       {Task.Supervisor, name: Observe.QueryTaskSupervisor},
+      Observe.QueryCache,
+      Observe.DatasetCache,
       {DNSCluster, query: Application.get_env(:observe, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Observe.PubSub},
       # Start a worker by calling: Observe.Worker.start_link(arg)

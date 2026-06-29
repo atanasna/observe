@@ -286,6 +286,563 @@ defmodule Observe.ExecutorTest do
     assert Enum.map(rows, & &1["time"]) == [7_200, 10_800]
   end
 
+  test "reuses cached Prometheus range data and fetches only missing suffix" do
+    cache = start_cache!()
+    parent = self()
+
+    dashboard = %{
+      "variables" => %{},
+      "datasources" => %{"prometheus" => %{"ref" => "fake-prometheus"}},
+      "queries" => %{
+        "requests" => %{
+          "datasource" => "prometheus",
+          "request" => %{"query" => "requests_total", "range" => true, "interval" => "1m"}
+        }
+      },
+      "panels" => []
+    }
+
+    opts = %{
+      datasources: %{
+        "fake-prometheus" => %{
+          "type" => "prometheus",
+          "mode" => "real",
+          "url" => "http://prometheus.test"
+        }
+      },
+      query_cache: cache,
+      prometheus_execute: fn _datasource, request ->
+        send(parent, {:prometheus_request, request["start"], request["end"]})
+        {:ok, rows_for(request["start"], request["end"], 60)}
+      end
+    }
+
+    assert {:ok, %{datasets: %{"requests" => rows}}} =
+             Executor.run(dashboard, %{}, Map.put(opts, :time_range, %{from: 0, to: 120}))
+
+    assert Enum.map(rows, & &1["time"]) == [0, 60, 120]
+    assert_receive {:prometheus_request, 0, 120}
+
+    assert {:ok, %{datasets: %{"requests" => rows}}} =
+             Executor.run(dashboard, %{}, Map.put(opts, :time_range, %{from: 0, to: 300}))
+
+    assert Enum.map(rows, & &1["time"]) == [0, 60, 120, 180, 240, 300]
+    assert_receive {:prometheus_request, 180, 300}
+    refute_receive {:prometheus_request, _start, _end}
+  end
+
+  test "cached Prometheus range data still flows through execution time processors" do
+    cache = start_cache!()
+
+    dashboard = %{
+      "variables" => %{},
+      "datasources" => %{"prometheus" => %{"ref" => "fake-prometheus"}},
+      "queries" => %{
+        "execution_time" => %{
+          "datasource" => "prometheus",
+          "request" => %{"query" => "execution_time", "range" => true, "interval" => "1m"}
+        }
+      },
+      "processors" => %{
+        "queue_execution_time" => %{
+          "query" => "execution_time",
+          "no_value" => 0,
+          "fill_missing" => 0,
+          "transform" => [%{"math" => %{"field" => "value", "divide" => 1000}}]
+        }
+      },
+      "datasets" => %{"queue_execution_time" => %{"processor" => "queue_execution_time"}},
+      "panels" => []
+    }
+
+    assert {:ok, %{datasets: %{"queue_execution_time" => rows}}} =
+             Executor.run(dashboard, %{}, %{
+               datasources: %{
+                 "fake-prometheus" => %{
+                   "type" => "prometheus",
+                   "mode" => "real",
+                   "url" => "http://prometheus.test"
+                 }
+               },
+               query_cache: cache,
+               time_range: %{from: 60, to: 180},
+               prometheus_execute: fn _datasource, request ->
+                 {:ok,
+                  [
+                    %{
+                      "tenant" => "a",
+                      "exported_job" => "Job",
+                      "time" => request["start"],
+                      "value" => 2500
+                    },
+                    %{
+                      "tenant" => "a",
+                      "exported_job" => "Job",
+                      "time" => request["end"],
+                      "value" => "NaN"
+                    }
+                  ]}
+               end
+             })
+
+    assert rows_by_job_and_time(rows) == %{
+             {"Job", 60} => 2.5,
+             {"Job", 120} => 0,
+             {"Job", 180} => 0
+           }
+  end
+
+  test "does not use raw query cache for topk Prometheus range queries" do
+    cache = start_cache!()
+    parent = self()
+
+    dashboard = %{
+      "variables" => %{},
+      "datasources" => %{"prometheus" => %{"ref" => "fake-prometheus"}},
+      "queries" => %{
+        "pressure" => %{
+          "datasource" => "prometheus",
+          "request" => %{
+            "query" => "topk(20, rate(metric[2m]))",
+            "range" => true,
+            "interval" => "1m"
+          }
+        }
+      },
+      "panels" => []
+    }
+
+    opts = %{
+      datasources: %{
+        "fake-prometheus" => %{
+          "type" => "prometheus",
+          "mode" => "real",
+          "url" => "http://prometheus.test"
+        }
+      },
+      query_cache: cache,
+      dataset_cache: nil,
+      time_range: %{from: 0, to: 120},
+      prometheus_execute: fn _datasource, request ->
+        send(parent, {:prometheus_request, request["start"], request["end"]})
+        {:ok, rows_for(request["start"], request["end"], 60)}
+      end
+    }
+
+    assert {:ok, %{datasets: %{"pressure" => rows}}} = Executor.run(dashboard, %{}, opts)
+    assert Enum.map(rows, & &1["time"]) == [0, 60, 120]
+    assert_receive {:prometheus_request, 0, 120}
+
+    assert {:ok, %{datasets: %{"pressure" => rows}}} = Executor.run(dashboard, %{}, opts)
+    assert Enum.map(rows, & &1["time"]) == [0, 60, 120]
+    assert_receive {:prometheus_request, 0, 120}
+    assert %{entries: 0, hits: 0, misses: 0} = Observe.QueryCache.stats(cache)
+
+    assert {:ok, %{datasets: %{"pressure" => rows}}} =
+             Executor.run(dashboard, %{}, Map.put(opts, :time_range, %{from: 0, to: 180}))
+
+    assert Enum.map(rows, & &1["time"]) == [0, 60, 120, 180]
+    assert_receive {:prometheus_request, 0, 180}
+  end
+
+  test "raw topk Prometheus range queries do not get stuck empty" do
+    cache = start_cache!()
+    parent = self()
+    counter = :counters.new(1, [])
+
+    dashboard = %{
+      "variables" => %{},
+      "datasources" => %{"prometheus" => %{"ref" => "fake-prometheus"}},
+      "queries" => %{
+        "pressure" => %{
+          "datasource" => "prometheus",
+          "request" => %{
+            "query" => "topk(20, rate(metric[2m]))",
+            "range" => true,
+            "interval" => "1m"
+          }
+        }
+      },
+      "panels" => []
+    }
+
+    opts = %{
+      datasources: %{
+        "fake-prometheus" => %{
+          "type" => "prometheus",
+          "mode" => "real",
+          "url" => "http://prometheus.test"
+        }
+      },
+      query_cache: cache,
+      dataset_cache: nil,
+      time_range: %{from: 0, to: 120},
+      prometheus_execute: fn _datasource, request ->
+        :counters.add(counter, 1, 1)
+        send(parent, {:prometheus_request, request["start"], request["end"]})
+
+        if :counters.get(counter, 1) == 1 do
+          {:ok, []}
+        else
+          {:ok, rows_for(request["start"], request["end"], 60)}
+        end
+      end
+    }
+
+    assert {:ok, %{datasets: %{"pressure" => []}}} = Executor.run(dashboard, %{}, opts)
+    assert_receive {:prometheus_request, 0, 120}
+
+    assert {:ok, %{datasets: %{"pressure" => rows}}} = Executor.run(dashboard, %{}, opts)
+    assert Enum.map(rows, & &1["time"]) == [0, 60, 120]
+    assert_receive {:prometheus_request, 0, 120}
+
+    assert {:ok, %{datasets: %{"pressure" => rows}}} = Executor.run(dashboard, %{}, opts)
+    assert Enum.map(rows, & &1["time"]) == [0, 60, 120]
+    assert_receive {:prometheus_request, 0, 120}
+  end
+
+  test "caches final source datasets by exact range" do
+    cache = start_dataset_cache!()
+    parent = self()
+
+    dashboard = %{
+      "variables" => %{},
+      "datasources" => %{"prometheus" => %{"ref" => "fake-prometheus"}},
+      "queries" => %{
+        "requests" => %{"datasource" => "prometheus", "request" => %{"query" => "requests"}}
+      },
+      "panels" => []
+    }
+
+    opts = %{
+      datasources: %{"fake-prometheus" => %{"type" => "prometheus"}},
+      dataset_cache: cache,
+      time_range: %{from: 0, to: 120},
+      source_dataset: fn "requests", _query ->
+        send(parent, :source_executed)
+        [%{"time" => 0, "value" => 1}]
+      end
+    }
+
+    assert {:ok, %{datasets: %{"requests" => [%{"value" => 1}]}}} =
+             Executor.run(dashboard, %{}, opts)
+
+    assert_receive :source_executed
+
+    assert {:ok, %{datasets: %{"requests" => [%{"value" => 1}]}}} =
+             Executor.run(dashboard, %{}, opts)
+
+    refute_receive :source_executed
+    assert %{hits: 1, misses: 1, puts: 1} = Observe.DatasetCache.stats(cache)
+  end
+
+  test "caches final derived datasets by exact range" do
+    cache = start_dataset_cache!()
+    parent = self()
+
+    dashboard = %{
+      "variables" => %{},
+      "datasources" => %{"prometheus" => %{"ref" => "fake-prometheus"}},
+      "queries" => %{
+        "source" => %{"datasource" => "prometheus", "request" => %{"query" => "source"}},
+        "derived" => %{
+          "from" => "source",
+          "transform" => [%{"filter" => %{"field" => "value", "gte" => 2}}]
+        }
+      },
+      "panels" => []
+    }
+
+    opts = %{
+      datasources: %{"fake-prometheus" => %{"type" => "prometheus"}},
+      dataset_cache: cache,
+      time_range: %{from: 0, to: 120},
+      source_dataset: fn "source", _query ->
+        send(parent, :source_executed)
+        [%{"time" => 0, "value" => 1}, %{"time" => 60, "value" => 2}]
+      end
+    }
+
+    assert {:ok, %{datasets: %{"derived" => [%{"value" => 2}]}}} =
+             Executor.run(dashboard, %{}, opts)
+
+    assert_receive :source_executed
+
+    assert {:ok, %{datasets: %{"derived" => [%{"value" => 2}]}}} =
+             Executor.run(dashboard, %{}, opts)
+
+    refute_receive :source_executed
+    assert %{hits: hits, misses: 2, puts: 2} = Observe.DatasetCache.stats(cache)
+    assert hits >= 2
+  end
+
+  test "incrementally caches final source datasets by time range" do
+    cache = start_dataset_cache!()
+    parent = self()
+
+    dashboard = %{
+      "variables" => %{},
+      "datasources" => %{"prometheus" => %{"ref" => "fake-prometheus"}},
+      "queries" => %{
+        "requests" => %{
+          "datasource" => "prometheus",
+          "request" => %{"query" => "requests", "range" => true, "interval" => "1m"}
+        }
+      },
+      "panels" => []
+    }
+
+    opts = %{
+      datasources: %{
+        "fake-prometheus" => %{
+          "type" => "prometheus",
+          "mode" => "real",
+          "url" => "http://prometheus.test"
+        }
+      },
+      dataset_cache: cache,
+      query_cache: nil,
+      prometheus_execute: fn _datasource, request ->
+        send(parent, {:prometheus_request, request["start"], request["end"]})
+        {:ok, rows_for(request["start"], request["end"], 60)}
+      end
+    }
+
+    assert {:ok, %{datasets: %{"requests" => rows}}} =
+             Executor.run(dashboard, %{}, Map.put(opts, :time_range, %{from: 0, to: 120}))
+
+    assert Enum.map(rows, & &1["time"]) == [0, 60, 120]
+    assert_receive {:prometheus_request, 0, 120}
+
+    assert {:ok, %{datasets: %{"requests" => rows}}} =
+             Executor.run(dashboard, %{}, Map.put(opts, :time_range, %{from: 0, to: 300}))
+
+    assert Enum.map(rows, & &1["time"]) == [0, 60, 120, 180, 240, 300]
+    assert_receive {:prometheus_request, 180, 300}
+    refute_receive {:prometheus_request, _start, _end}
+    assert %{range_hits: 0, range_misses: 2, fetched_gaps: 2} = Observe.DatasetCache.stats(cache)
+
+    assert {:ok, %{datasets: %{"requests" => rows}}} =
+             Executor.run(dashboard, %{}, Map.put(opts, :time_range, %{from: 0, to: 300}))
+
+    assert Enum.map(rows, & &1["time"]) == [0, 60, 120, 180, 240, 300]
+    refute_receive {:prometheus_request, _start, _end}
+    assert %{range_hits: 1} = Observe.DatasetCache.stats(cache)
+  end
+
+  test "dataset range cache hits rows with float timestamps" do
+    cache = start_dataset_cache!()
+    parent = self()
+
+    dashboard = %{
+      "variables" => %{},
+      "datasources" => %{"prometheus" => %{"ref" => "fake-prometheus"}},
+      "queries" => %{
+        "requests" => %{
+          "datasource" => "prometheus",
+          "request" => %{"query" => "requests", "range" => true, "interval" => "1m"}
+        }
+      },
+      "panels" => []
+    }
+
+    opts = %{
+      datasources: %{
+        "fake-prometheus" => %{
+          "type" => "prometheus",
+          "mode" => "real",
+          "url" => "http://prometheus.test"
+        }
+      },
+      dataset_cache: cache,
+      query_cache: nil,
+      time_range: %{from: 0, to: 120},
+      prometheus_execute: fn _datasource, request ->
+        send(parent, {:prometheus_request, request["start"], request["end"]})
+
+        {:ok,
+         Enum.map(request["start"]..request["end"]//60, fn time ->
+           %{"service" => "api", "time" => time / 1, "value" => time}
+         end)}
+      end
+    }
+
+    assert {:ok, %{datasets: %{"requests" => rows}}} = Executor.run(dashboard, %{}, opts)
+    assert Enum.map(rows, & &1["time"]) == [0.0, 60.0, 120.0]
+    assert_receive {:prometheus_request, 0, 120}
+
+    assert {:ok, %{datasets: %{"requests" => rows}}} = Executor.run(dashboard, %{}, opts)
+    assert Enum.map(rows, & &1["time"]) == [0.0, 60.0, 120.0]
+    refute_receive {:prometheus_request, _start, _end}
+    assert %{range_hits: 1} = Observe.DatasetCache.stats(cache)
+  end
+
+  test "incrementally caches final derived datasets by time range" do
+    cache = start_dataset_cache!()
+    parent = self()
+
+    dashboard = %{
+      "variables" => %{},
+      "datasources" => %{"prometheus" => %{"ref" => "fake-prometheus"}},
+      "queries" => %{
+        "source" => %{
+          "datasource" => "prometheus",
+          "request" => %{"query" => "source", "range" => true, "interval" => "1m"}
+        },
+        "derived" => %{
+          "from" => "source",
+          "transform" => [%{"math" => %{"field" => "value", "divide" => 10}}]
+        }
+      },
+      "panels" => []
+    }
+
+    opts = %{
+      datasources: %{
+        "fake-prometheus" => %{
+          "type" => "prometheus",
+          "mode" => "real",
+          "url" => "http://prometheus.test"
+        }
+      },
+      dataset_cache: cache,
+      query_cache: nil,
+      prometheus_execute: fn _datasource, request ->
+        send(parent, {:prometheus_request, request["start"], request["end"]})
+        {:ok, rows_for(request["start"], request["end"], 60)}
+      end
+    }
+
+    assert {:ok, %{datasets: %{"derived" => rows}}} =
+             Executor.run(dashboard, %{}, Map.put(opts, :time_range, %{from: 0, to: 120}))
+
+    assert Enum.map(rows, & &1["value"]) == [0.0, 6.0, 12.0]
+    assert_receive {:prometheus_request, 0, 120}
+
+    assert {:ok, %{datasets: %{"derived" => rows}}} =
+             Executor.run(dashboard, %{}, Map.put(opts, :time_range, %{from: 0, to: 300}))
+
+    assert Enum.map(rows, & &1["time"]) == [0, 60, 120, 180, 240, 300]
+    assert Enum.map(rows, & &1["value"]) == [0.0, 6.0, 12.0, 18.0, 24.0, 30.0]
+    assert_receive {:prometheus_request, 180, 300}
+    refute_receive {:prometheus_request, _start, _end}
+  end
+
+  test "topk-backed final datasets use exact dataset cache" do
+    cache = start_dataset_cache!()
+    parent = self()
+
+    dashboard = %{
+      "variables" => %{},
+      "datasources" => %{"prometheus" => %{"ref" => "fake-prometheus"}},
+      "queries" => %{
+        "source" => %{
+          "datasource" => "prometheus",
+          "request" => %{
+            "query" => "topk(20, rate(metric[2m]))",
+            "range" => true,
+            "interval" => "1m"
+          }
+        },
+        "derived" => %{
+          "from" => "source",
+          "transform" => [%{"math" => %{"field" => "value", "divide" => 10}}]
+        }
+      },
+      "panels" => []
+    }
+
+    opts = %{
+      datasources: %{
+        "fake-prometheus" => %{
+          "type" => "prometheus",
+          "mode" => "real",
+          "url" => "http://prometheus.test"
+        }
+      },
+      dataset_cache: cache,
+      query_cache: nil,
+      prometheus_execute: fn _datasource, request ->
+        send(parent, {:prometheus_request, request["start"], request["end"]})
+        {:ok, rows_for(request["start"], request["end"], 60)}
+      end
+    }
+
+    assert {:ok, %{datasets: %{"derived" => rows}}} =
+             Executor.run(dashboard, %{}, Map.put(opts, :time_range, %{from: 0, to: 120}))
+
+    assert Enum.map(rows, & &1["value"]) == [0.0, 6.0, 12.0]
+    assert_receive {:prometheus_request, 0, 120}
+
+    assert {:ok, %{datasets: %{"derived" => rows}}} =
+             Executor.run(dashboard, %{}, Map.put(opts, :time_range, %{from: 0, to: 300}))
+
+    assert Enum.map(rows, & &1["time"]) == [0, 60, 120, 180, 240, 300]
+    assert_receive {:prometheus_request, 0, 300}
+
+    assert {:ok, %{datasets: %{"derived" => rows}}} =
+             Executor.run(dashboard, %{}, Map.put(opts, :time_range, %{from: 0, to: 300}))
+
+    assert Enum.map(rows, & &1["time"]) == [0, 60, 120, 180, 240, 300]
+    refute_receive {:prometheus_request, _start, _end}
+    assert %{entries: entries, hits: hits, range_entries: 0} = Observe.DatasetCache.stats(cache)
+    assert entries > 0
+    assert hits > 0
+  end
+
+  test "does not cache empty final datasets" do
+    cache = start_dataset_cache!()
+    parent = self()
+    counter = :counters.new(1, [])
+
+    dashboard = %{
+      "variables" => %{},
+      "datasources" => %{"prometheus" => %{"ref" => "fake-prometheus"}},
+      "queries" => %{
+        "source" => %{
+          "datasource" => "prometheus",
+          "request" => %{
+            "query" => "topk(20, rate(metric[2m]))",
+            "range" => true,
+            "interval" => "1m"
+          }
+        }
+      },
+      "panels" => []
+    }
+
+    opts = %{
+      datasources: %{
+        "fake-prometheus" => %{
+          "type" => "prometheus",
+          "mode" => "real",
+          "url" => "http://prometheus.test"
+        }
+      },
+      dataset_cache: cache,
+      query_cache: nil,
+      time_range: %{from: 0, to: 120},
+      prometheus_execute: fn _datasource, request ->
+        :counters.add(counter, 1, 1)
+        send(parent, {:prometheus_request, request["start"], request["end"]})
+
+        if :counters.get(counter, 1) == 1 do
+          {:ok, []}
+        else
+          {:ok, rows_for(request["start"], request["end"], 60)}
+        end
+      end
+    }
+
+    assert {:ok, %{datasets: %{"source" => []}}} = Executor.run(dashboard, %{}, opts)
+    assert_receive {:prometheus_request, 0, 120}
+    assert %{entries: 0} = Observe.DatasetCache.stats(cache)
+
+    assert {:ok, %{datasets: %{"source" => rows}}} = Executor.run(dashboard, %{}, opts)
+    assert Enum.map(rows, & &1["time"]) == [0, 60, 120]
+    assert_receive {:prometheus_request, 0, 120}
+  end
+
   defp source_dashboard do
     %{
       "variables" => %{},
@@ -308,5 +865,32 @@ defmodule Observe.ExecutorTest do
 
   defp rows_by_series_and_time(rows) do
     Map.new(rows, fn row -> {{row["tenant"], row["time"]}, row["value"]} end)
+  end
+
+  defp rows_by_job_and_time(rows) do
+    Map.new(rows, fn row -> {{row["exported_job"], row["time"]}, row["value"]} end)
+  end
+
+  defp start_cache! do
+    suffix = System.unique_integer([:positive])
+    task_supervisor = Module.concat(__MODULE__, "TaskSupervisor#{suffix}")
+    cache = Module.concat(__MODULE__, "Cache#{suffix}")
+
+    start_supervised!({Task.Supervisor, name: task_supervisor})
+
+    start_supervised!(
+      {Observe.QueryCache, name: cache, task_supervisor: task_supervisor, cleanup?: false}
+    )
+  end
+
+  defp start_dataset_cache! do
+    cache = Module.concat(__MODULE__, "DatasetCache#{System.unique_integer([:positive])}")
+    start_supervised!({Observe.DatasetCache, name: cache, cleanup?: false})
+  end
+
+  defp rows_for(from, to, step) do
+    Enum.map(from..to//step, fn time ->
+      %{"service" => "api", "time" => time, "value" => time}
+    end)
   end
 end

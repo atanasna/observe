@@ -41,6 +41,7 @@ defmodule ObserveWeb.DashboardShowLive do
          |> assign(:refresh_timer, nil)
          |> assign(:run_ref, nil)
          |> assign(:run_id, nil)
+         |> assign(:last_run_signature, nil)
          |> assign(:run_started_at, nil)
          |> assign(:dashboard_load_ms, nil)
          |> assign(:loading?, false)
@@ -204,7 +205,7 @@ defmodule ObserveWeb.DashboardShowLive do
     socket =
       socket
       |> sync_relative_time_fields()
-      |> start_dashboard_run(socket.assigns.variable_values)
+      |> start_dashboard_run(socket.assigns.variable_values, :all, force: true)
       |> schedule_refresh_timer()
 
     {:noreply, socket}
@@ -277,7 +278,18 @@ defmodule ObserveWeb.DashboardShowLive do
   defp start_dashboard_run(socket, variable_values),
     do: start_dashboard_run(socket, variable_values, :all)
 
-  defp start_dashboard_run(socket, variable_values, only) do
+  defp start_dashboard_run(socket, variable_values, only, opts \\ []) do
+    signature = run_signature(socket, variable_values, only)
+
+    if not Keyword.get(opts, :force, false) and socket.assigns.last_run_signature == signature and
+         not socket.assigns.loading? and socket.assigns.datasets != %{} do
+      socket
+    else
+      do_start_dashboard_run(socket, variable_values, only, signature)
+    end
+  end
+
+  defp do_start_dashboard_run(socket, variable_values, only, signature) do
     caller = self()
     run_id = make_ref()
 
@@ -304,8 +316,13 @@ defmodule ObserveWeb.DashboardShowLive do
     |> assign(:dashboard_load_ms, nil)
     |> assign(:run_ref, task.ref)
     |> assign(:run_id, run_id)
+    |> assign(:last_run_signature, signature)
     |> maybe_clear_datasets(only)
     |> assign(:error, nil)
+  end
+
+  defp run_signature(socket, variable_values, only) do
+    {selected_time_range(socket), variable_values, only}
   end
 
   defp maybe_put_only(opts, :all), do: opts
@@ -460,15 +477,10 @@ defmodule ObserveWeb.DashboardShowLive do
     [{"↻", "off"}, {"10s", "10s"}, {"30s", "30s"}, {"1m", "1m"}, {"5m", "5m"}]
   end
 
-  defp selected_time_range(%{assigns: %{time_range_preset: preset}} = socket)
-       when preset != "custom" do
-    TimeRange.range(preset)
-  rescue
-    _ -> TimeRange.custom!(socket.assigns.start_time, socket.assigns.end_time)
-  end
-
   defp selected_time_range(socket) do
     TimeRange.custom!(socket.assigns.start_time, socket.assigns.end_time)
+  rescue
+    _ -> TimeRange.range(socket.assigns.time_range_preset)
   end
 
   defp sync_relative_time_fields(%{assigns: %{time_range_preset: "custom"}} = socket), do: socket
