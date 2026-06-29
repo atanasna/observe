@@ -10,12 +10,13 @@ variables:
   source:
     type: datasource
     datasource_type: prometheus
-    default: 
+    default: au-charge 
   deployment:
     type: label_values
     datasource: ${vars.source}
     metric: app_queue_low_running_size
     metric_label: deployment
+    default: au-charge 
   priority:
     type: label_values
     datasource: ${vars.source}

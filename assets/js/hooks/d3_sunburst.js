@@ -1,11 +1,18 @@
 import * as d3 from "d3"
 
 const colors = ["#89b4fa", "#cba6f7", "#f5c2e7", "#94e2d5", "#a6e3a1", "#f9e2af", "#fab387", "#f38ba8"]
+const zoomChangedEvent = "observe:timeseries-zoom-changed"
+let globalZoomDomain = null
 
 export const D3Sunburst = {
   mounted() {
     this.focusPath = []
+    this.zoomChanged = event => {
+      globalZoomDomain = event.detail?.domain || null
+      this.scheduleRender()
+    }
     this.fullscreenChanged = () => this.scheduleRender()
+    window.addEventListener(zoomChangedEvent, this.zoomChanged)
     document.addEventListener("fullscreenchange", this.fullscreenChanged)
     this.resizeObserver = new ResizeObserver(() => this.scheduleRender())
     this.resizeObserver.observe(this.el)
@@ -15,6 +22,7 @@ export const D3Sunburst = {
     this.scheduleRender()
   },
   destroyed() {
+    window.removeEventListener(zoomChangedEvent, this.zoomChanged)
     document.removeEventListener("fullscreenchange", this.fullscreenChanged)
     if (this.resizeObserver) this.resizeObserver.disconnect()
     if (this.frame) cancelAnimationFrame(this.frame)
@@ -97,14 +105,24 @@ export const D3Sunburst = {
       return
     }
 
-    const focusData = focusedData(payload.root, this.focusPath)
+    const zoomedRoot = zoomFilteredRoot(payload, globalZoomDomain)
+
+    if (!zoomedRoot.children || zoomedRoot.children.length === 0) {
+      const empty = document.createElement("div")
+      empty.className = "grid h-40 place-items-center text-xs text-[#9399b2]"
+      empty.textContent = "No chartable data in the selected time range."
+      this.el.appendChild(empty)
+      return
+    }
+
+    const focusData = focusedData(zoomedRoot, this.focusPath)
     if (!focusData) this.focusPath = []
 
     const host = document.createElement("div")
     host.className = "grid min-h-40 place-items-center"
     this.el.appendChild(host)
 
-    const rootData = focusData || payload.root
+    const rootData = focusData || zoomedRoot
     const root = d3.hierarchy(rootData).sum(d => d.value || 0).sort((a, b) => b.value - a.value)
     d3.partition().size([2 * Math.PI, radius])(root)
 
@@ -179,6 +197,56 @@ export const D3Sunburst = {
         .text(this.focusPath[this.focusPath.length - 1])
     }
   },
+}
+
+function zoomFilteredRoot(payload, zoomDomain) {
+  const rows = Array.isArray(payload.rows) ? payload.rows : []
+  const hasTimestampedRows = rows.some(row => Number.isFinite(row.time))
+
+  if (!validZoomDomain(zoomDomain) || rows.length === 0 || !hasTimestampedRows) {
+    return payload.root
+  }
+
+  const [start, end] = zoomDomain[0] <= zoomDomain[1] ? zoomDomain : [zoomDomain[1], zoomDomain[0]]
+  const root = {name: "root", children: new Map()}
+
+  rows
+    .filter(row => Number.isFinite(row.time) && row.time >= start && row.time <= end)
+    .forEach(row => addSunburstValue(root, row.path || [], row.value || 0))
+
+  return finalizeSunburstNode(root)
+}
+
+function validZoomDomain(zoomDomain) {
+  return zoomDomain && Number.isFinite(zoomDomain[0]) && Number.isFinite(zoomDomain[1]) && zoomDomain[0] !== zoomDomain[1]
+}
+
+function addSunburstValue(node, path, value) {
+  if (path.length === 0) {
+    node.value = (node.value || 0) + Math.max(value, 0)
+    return
+  }
+
+  const [name, ...rest] = path
+  const childName = String(name || "unknown")
+  const child = node.children.get(childName) || {name: childName, children: new Map()}
+
+  addSunburstValue(child, rest, value)
+  node.children.set(childName, child)
+}
+
+function finalizeSunburstNode(node) {
+  if (node.children.size === 0) {
+    return {name: node.name, value: node.value || 0}
+  }
+
+  const children = Array.from(node.children.values()).map(finalizeSunburstNode)
+
+  return {
+    name: node.name,
+    children,
+    value: children.reduce((sum, child) => sum + (child.value || 0), 0)
+  }
 }
 
 function focusedData(root, path) {

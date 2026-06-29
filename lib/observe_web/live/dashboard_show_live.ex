@@ -1842,7 +1842,19 @@ defmodule ObserveWeb.DashboardShowLive do
         put_sunburst_value(root, path, value)
       end)
 
-    %{root: finalize_sunburst_node(root), levels: levels}
+    %{
+      root: finalize_sunburst_node(root),
+      levels: levels,
+      rows: Enum.map(rows, &sunburst_payload_row(&1, levels))
+    }
+  end
+
+  defp sunburst_payload_row(row, levels) do
+    %{
+      "time" => Map.get(row, "time"),
+      "value" => numeric_value(Map.get(row, "value")),
+      "path" => Enum.map(levels, &to_string(Map.get(row, &1, "unknown")))
+    }
   end
 
   defp sunburst_levels(_rows, %{"levels" => levels}) when is_list(levels), do: levels
