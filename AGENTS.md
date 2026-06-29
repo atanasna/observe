@@ -1,5 +1,16 @@
 This is a web application written using the Phoenix web framework.
 
+# Overview
+The app is used to poll and visualize data, similar to Grafana.
+
+# Core Concepts
+1. Datasource - This is the place where the data is stored and will be pulled. Example are Grafana, Opensearch, AWS Cloudwatch etc.
+1. Query - This is template of a query that will be ran agains a datasource. It accepts inputs that are interpolated in the query before execution.
+1. Processor - This is an action that can be applied to data. These can be transforms, filters, math functions. etc
+1. Dataset - Used to store actual data
+1. Panel - Used to visualize one or more dataset. It is responsible for any visual details. It can have many tipes, like timeline, sunburst etc.
+1. Dashaboard - Placeholder for various panels
+
 ## Project guidelines
 
 - Use `mix precommit` alias when you are done with all changes and fix any pending issues

@@ -38,3 +38,7 @@ processors:
         deployment: ${inputs.deployment}
         tenant: ${inputs.tenant}
         priority: ${inputs.priority}
+    transform:
+      - math:
+          field: value
+          divide: 1000

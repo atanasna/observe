@@ -8,6 +8,7 @@ export const D3Timeseries = {
   mounted() {
     this.selectedLabels = new Set()
     this.legendVisible = false
+    this.legendWidth = null
     this.zoomChanged = () => this.scheduleRender()
     this.fullscreenChanged = () => this.scheduleRender()
     window.addEventListener(zoomChangedEvent, this.zoomChanged)
@@ -22,6 +23,7 @@ export const D3Timeseries = {
   destroyed() {
     window.removeEventListener(zoomChangedEvent, this.zoomChanged)
     document.removeEventListener("fullscreenchange", this.fullscreenChanged)
+    this.stopLegendResize()
     if (this.resizeObserver) this.resizeObserver.disconnect()
     if (this.frame) cancelAnimationFrame(this.frame)
   },
@@ -38,7 +40,12 @@ export const D3Timeseries = {
     const style = getComputedStyle(this.el)
     const horizontalPadding = parseFloat(style.paddingLeft || 0) + parseFloat(style.paddingRight || 0)
     const measuredWidth = this.el.getBoundingClientRect().width - horizontalPadding
-    const legendWidth = sideLegend ? sideLegendWidth(payload.series, measuredWidth || 640) : 0
+    const autoLegendWidth = sideLegend ? sideLegendWidth(payload.series, measuredWidth || 640) : 0
+    const legendWidth = sideLegend
+      ? this.legendWidth == null
+        ? autoLegendWidth
+        : constrainedLegendWidth(this.legendWidth, measuredWidth || 640)
+      : 0
     const sideLegendGap = sideLegend ? 8 : 0
     const width = Math.max((measuredWidth || 640) - legendWidth - sideLegendGap, 160)
     const fullscreen = document.fullscreenElement === this.el
@@ -173,13 +180,17 @@ export const D3Timeseries = {
       legendHost.style.maxHeight = `${height}px`
     }
 
+    const legendResizeHandle = sideLegend ? this.legendResizeHandle(legendPosition, legendWidth, measuredWidth || 640) : null
+
     if (!this.legendVisible) {
       chartBody.appendChild(svgHost)
     } else if (legendPosition === "top" || legendPosition === "left") {
       chartBody.appendChild(legendHost)
+      if (legendResizeHandle) chartBody.appendChild(legendResizeHandle)
       chartBody.appendChild(svgHost)
     } else {
       chartBody.appendChild(svgHost)
+      if (legendResizeHandle) chartBody.appendChild(legendResizeHandle)
       chartBody.appendChild(legendHost)
     }
 
@@ -295,6 +306,19 @@ export const D3Timeseries = {
       tooltip.classed("hidden", true)
     }
 
+    const focusNearestSeries = event => {
+      if (this.ignoreNextChartClick) {
+        this.ignoreNextChartClick = false
+        return
+      }
+
+      const [mouseX, mouseY] = d3.pointer(event, g.node())
+      const nearest = nearestPointForCursor(domainSeries, mouseX, mouseY, x, y, stacked, stackData)
+      if (!nearest) return
+
+      this.focusSeries(nearest.series.label, event)
+    }
+
     const brush = d3.brushX()
       .extent([[0, 0], [innerWidth, innerHeight]])
       .on("end", event => {
@@ -305,6 +329,7 @@ export const D3Timeseries = {
 
         if (Math.abs(end - start) < 8) return
 
+        this.ignoreNextChartClick = true
         setGlobalZoomDomain([x.invert(start).getTime() / 1000, x.invert(end).getTime() / 1000])
       })
 
@@ -316,6 +341,7 @@ export const D3Timeseries = {
       .style("cursor", "crosshair")
       .on("pointermove", showHover)
       .on("pointerleave", hideHover)
+      .on("click", focusNearestSeries)
 
     brushGroup.selectAll(".selection")
       .attr("fill", "#89dceb")
@@ -332,21 +358,7 @@ export const D3Timeseries = {
       const item = legend.append("button")
         .attr("type", "button")
         .attr("class", `flex min-w-0 items-center gap-2 border border-transparent px-1.5 py-1 text-left transition hover:border-[#89dceb]/25 ${muted ? "opacity-35" : "opacity-100"} ${isolated ? "bg-[#89dceb]/10 text-[#89dceb]" : ""}`)
-        .on("click", event => {
-          if (event.shiftKey || event.altKey) {
-            if (isolated) {
-              this.selectedLabels.delete(series.label)
-            } else {
-              this.selectedLabels.add(series.label)
-            }
-          } else if (isolated && this.selectedLabels.size === 1) {
-            this.selectedLabels.clear()
-          } else {
-            this.selectedLabels = new Set([series.label])
-          }
-
-          this.render()
-        })
+        .on("click", event => this.focusSeries(series.label, event))
       item.append("span")
         .attr("class", "size-2 shrink-0")
         .style("background", colors[index % colors.length])
@@ -354,6 +366,75 @@ export const D3Timeseries = {
         .attr("class", sideLegend ? "whitespace-nowrap text-[#bac2de]" : "truncate text-[#bac2de]")
         .text(series.label)
     })
+  },
+  legendResizeHandle(position, legendWidth, panelWidth) {
+    const handle = document.createElement("button")
+    handle.type = "button"
+    handle.className = "group hidden w-2 cursor-col-resize touch-none self-stretch md:flex md:items-stretch md:justify-center"
+    handle.setAttribute("aria-label", "Resize legend")
+    handle.title = "Drag to resize legend"
+    handle.innerHTML = '<span class="my-1 block w-px bg-[#45475a] transition group-hover:bg-[#89dceb]"></span>'
+    handle.addEventListener("pointerdown", event => this.startLegendResize(event, position, legendWidth, panelWidth))
+    return handle
+  },
+  focusSeries(label, event) {
+    const isolated = this.selectedLabels.has(label)
+
+    if (event.shiftKey || event.altKey) {
+      if (isolated) {
+        this.selectedLabels.delete(label)
+      } else {
+        this.selectedLabels.add(label)
+      }
+    } else if (isolated && this.selectedLabels.size === 1) {
+      this.selectedLabels.clear()
+    } else {
+      this.selectedLabels = new Set([label])
+    }
+
+    this.render()
+  },
+  startLegendResize(event, position, legendWidth, panelWidth) {
+    event.preventDefault()
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+    this.stopLegendResize()
+
+    this.legendResize = {
+      position,
+      panelWidth,
+      startX: event.clientX,
+      startWidth: legendWidth,
+      bodyCursor: document.body.style.cursor,
+      bodyUserSelect: document.body.style.userSelect
+    }
+    this.legendResizeMove = event => this.updateLegendResize(event)
+    this.legendResizeUp = () => this.stopLegendResize()
+    document.body.style.cursor = "col-resize"
+    document.body.style.userSelect = "none"
+    window.addEventListener("pointermove", this.legendResizeMove)
+    window.addEventListener("pointerup", this.legendResizeUp, {once: true})
+  },
+  updateLegendResize(event) {
+    if (!this.legendResize) return
+
+    const delta = event.clientX - this.legendResize.startX
+    const direction = this.legendResize.position === "left" ? 1 : -1
+    this.legendWidth = constrainedLegendWidth(
+      this.legendResize.startWidth + delta * direction,
+      this.legendResize.panelWidth
+    )
+    this.scheduleRender()
+  },
+  stopLegendResize() {
+    if (this.legendResizeMove) window.removeEventListener("pointermove", this.legendResizeMove)
+    if (this.legendResizeUp) window.removeEventListener("pointerup", this.legendResizeUp)
+    if (this.legendResize) {
+      document.body.style.cursor = this.legendResize.bodyCursor
+      document.body.style.userSelect = this.legendResize.bodyUserSelect
+    }
+    this.legendResize = null
+    this.legendResizeMove = null
+    this.legendResizeUp = null
   },
 }
 
@@ -420,6 +501,13 @@ function sideLegendWidth(seriesList, panelWidth) {
   const measuredWidth = d3.max(seriesList, series => textWidth(series.label)) || 0
 
   return Math.min(Math.ceil(measuredWidth + 38), maxWidth)
+}
+
+function constrainedLegendWidth(width, panelWidth) {
+  const maxWidth = Math.max(80, Math.min(panelWidth * 0.7, panelWidth - 168))
+  const minWidth = Math.min(96, maxWidth)
+
+  return Math.max(minWidth, Math.min(Math.ceil(width), maxWidth))
 }
 
 function textWidth(value) {
